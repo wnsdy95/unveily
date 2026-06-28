@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and design discussion
+    url: https://github.com/wnsdy95/unveily/discussions
+    about: Use Discussions for open-ended questions, ideas, and design tradeoffs.
+  - name: Security vulnerability
+    url: https://github.com/wnsdy95/unveily/security/policy
+    about: Please do not report vulnerabilities in public issues.

@@ -1,5 +1,7 @@
 # unveily
 
+[![CI](https://github.com/wnsdy95/unveily/actions/workflows/ci.yml/badge.svg)](https://github.com/wnsdy95/unveily/actions/workflows/ci.yml)
+
 Chrome extension that summarizes terms of service and privacy policies, then highlights risky clauses, collected data categories, retention, sharing concerns, cookie consent behavior, and observed page activity.
 
 ## Why this exists

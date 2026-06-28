@@ -19,6 +19,16 @@ This project is a Chrome Manifest V3 extension with no backend by default. Keep 
 - Do not add external network calls for analysis without explicit user consent and documentation.
 - Clearly document user-visible privacy or permission changes.
 
+## Pull request policy
+
+- All changes to `main` should go through pull requests.
+- At least one approving review is expected before merge.
+- Required CI checks must pass.
+- Stale approvals should be refreshed after meaningful changes.
+- Conversations should be resolved before merge.
+- Prefer squash merges to keep the public history readable.
+- Security-sensitive changes, permission changes, and remote-data-flow changes require extra scrutiny in the pull request description.
+
 ## Code style
 
 - Use plain JavaScript modules matching the existing style.
