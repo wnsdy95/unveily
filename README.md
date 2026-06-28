@@ -18,6 +18,8 @@ unveily exists to make those risks visible. It is built for the rights and priva
 
 unveily is under active development. The current codebase is a working prototype, but not every behavior is smooth, complete, or production-ready yet. Some pages will analyze well; others may fail because of browser restrictions, dynamic rendering, consent-manager complexity, or extraction limits.
 
+For user security and privacy, unveily is currently being built as a local-only Chrome extension without server communication. Analysis runs in the browser, and the project intentionally avoids sending analyzed page text, policy text, cookies, storage keys, or browsing activity to a backend.
+
 ## What it does
 
 - Reads visible text from the active tab.
@@ -76,7 +78,7 @@ unveily is rule-based by design. It is useful for fast triage, but it is not leg
 
 ## Privacy model
 
-unveily is local-first. It does not send analyzed page text, policy text, cookies, storage keys, or browsing activity to a remote service by default. See [PRIVACY.md](PRIVACY.md) for the data handling model.
+unveily is local-first. The current extension is designed to work without server communication, and it does not send analyzed page text, policy text, cookies, storage keys, or browsing activity to a remote service by default. See [PRIVACY.md](PRIVACY.md) for the data handling model.
 
 ## Run locally
 
