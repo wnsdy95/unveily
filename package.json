@@ -1,0 +1,12 @@
+{
+  "name": "unveily",
+  "description": "Local-first Chrome extension for terms, privacy, consent, and behavior-policy analysis.",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/analyzer.js && node --check src/popup.js && node --check src/content.js && node --check src/background.js && node --check src/vendorRules.js && node --check src/customRulesStorage.js && node --check src/options.js && node --check src/report.js && node --check src/policySnapshots.js && node --check src/policyMonitor.js && node --check src/i18n.js"
+  }
+}

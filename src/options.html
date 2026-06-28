@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title data-i18n="optionTitle">unveily 설정</title>
+    <link rel="stylesheet" href="./popup.css">
+    <link rel="stylesheet" href="./options.css">
+  </head>
+  <body class="options-body">
+    <main class="options-app">
+      <header class="topbar">
+        <div class="topbar-main">
+          <div>
+            <h1 data-i18n="optionsHeading">로컬 벤더 룰</h1>
+            <p data-i18n="optionsDescription">사용자 정의 도메인 분류는 이 브라우저의 로컬 저장소에만 저장됩니다.</p>
+          </div>
+          <label class="language-switch">
+            <span data-i18n="languageLabel">언어</span>
+            <select id="uiLanguageSelect" data-i18n-aria-label="languageLabel">
+              <option value="auto" data-i18n="languageAuto">자동</option>
+              <option value="ko" data-i18n="languageKorean">한국어</option>
+              <option value="en" data-i18n="languageEnglish">English</option>
+            </select>
+          </label>
+        </div>
+      </header>
+
+      <section class="panel">
+        <form id="ruleForm" class="rule-form">
+          <input id="ruleId" type="hidden">
+
+          <label for="vendor" data-i18n="vendorName">벤더명</label>
+          <input id="vendor" required placeholder="예: NICE 본인인증" data-i18n-placeholder="vendorPlaceholder">
+
+          <label for="patterns" data-i18n="domainPatterns">도메인 패턴</label>
+          <input id="patterns" required placeholder="예: niceid.co.kr, nice.co.kr" data-i18n-placeholder="domainPatternsPlaceholder">
+
+          <label for="category" data-i18n="category">카테고리</label>
+          <select id="category">
+            <option value="authentication">authentication</option>
+            <option value="payment">payment</option>
+            <option value="analytics">analytics</option>
+            <option value="advertising">advertising</option>
+            <option value="support">support</option>
+            <option value="error_monitoring">error_monitoring</option>
+            <option value="cdn_security">cdn_security</option>
+            <option value="hosting">hosting</option>
+            <option value="security">security</option>
+            <option value="unknown">unknown</option>
+          </select>
+
+          <label for="risk" data-i18n="riskRole">위험/역할</label>
+          <select id="risk">
+            <option value="processor">processor</option>
+            <option value="tracking">tracking</option>
+            <option value="infrastructure">infrastructure</option>
+            <option value="unknown">unknown</option>
+          </select>
+
+          <fieldset>
+            <legend data-i18n="requiredPolicySections">필요 정책 섹션</legend>
+            <label><input type="checkbox" name="section" value="processors" checked> <span data-i18n="processors">처리위탁</span></label>
+            <label><input type="checkbox" name="section" value="purpose" checked> <span data-i18n="purpose">수집 목적</span></label>
+            <label><input type="checkbox" name="section" value="security" checked> <span data-i18n="security">보안 조치</span></label>
+            <label><input type="checkbox" name="section" value="cookies_tracking"> <span data-i18n="cookiesTracking">쿠키/행태정보</span></label>
+            <label><input type="checkbox" name="section" value="third_party"> <span data-i18n="thirdParty">제3자 제공</span></label>
+            <label><input type="checkbox" name="section" value="overseas_transfer"> <span data-i18n="overseasTransfer">국외 이전</span></label>
+          </fieldset>
+
+          <div class="form-actions">
+            <button type="submit" data-i18n="save">저장</button>
+            <button id="cancelEditButton" type="button" class="secondary" data-i18n="cancel">취소</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2 data-i18n="savedRules">저장된 룰</h2>
+        <div id="ruleList" class="rule-list"></div>
+      </section>
+
+      <section class="panel">
+        <h2 data-i18n="savedSnapshots">저장된 정책 스냅샷</h2>
+        <div id="snapshotList" class="rule-list"></div>
+      </section>
+
+      <section id="status" class="status" role="status"></section>
+    </main>
+    <script type="module" src="./options.js"></script>
+  </body>
+</html>

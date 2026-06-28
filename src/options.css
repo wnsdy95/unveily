@@ -1,0 +1,96 @@
+.options-body {
+  width: auto;
+  min-height: 100vh;
+}
+
+.options-app {
+  max-width: 900px;
+  margin: 0 auto;
+  padding-bottom: 32px;
+}
+
+.rule-form {
+  display: grid;
+  gap: 10px;
+}
+
+input,
+select {
+  width: 100%;
+  border: 1px solid #c3ccda;
+  border-radius: 6px;
+  padding: 10px;
+  font: inherit;
+}
+
+fieldset {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin: 4px 0 0;
+  border: 1px solid #d7dee8;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+legend {
+  padding: 0 6px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-weight: 500;
+}
+
+fieldset input {
+  width: auto;
+}
+
+.form-actions,
+.rule-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.rule-list {
+  display: grid;
+  gap: 10px;
+}
+
+.rule-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid #eef2f6;
+  padding-top: 12px;
+}
+
+.rule-item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.rule-item p {
+  margin-top: 4px;
+  color: #344054;
+  font-size: 13px;
+}
+
+.rule-item span {
+  display: block;
+  margin-top: 5px;
+  color: #667085;
+  font-size: 12px;
+}
+
+button.danger {
+  border-color: #fecdca;
+  color: #b42318;
+}
