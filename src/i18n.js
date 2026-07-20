@@ -1,3 +1,5 @@
+import { ensureTrustedLocalStorage } from "./trustedLocalStorage.js";
+
 const LOCALE_PREFERENCE_KEY = "uiLocaleOverride";
 const LEGACY_LOCALE_PREFERENCE_KEYS = ["localePreference", "locale", "language", "uiLocale"];
 const AUTO_LOCALE = "auto";
@@ -9,7 +11,7 @@ let effectiveLocale = null;
 const FALLBACK_MESSAGES = {
   ko: {
     appName: "unveily",
-    appDescription: "약관과 개인정보처리방침을 요약하고 위험 조항과 수집 데이터를 표시합니다.",
+    appDescription: "기본적으로 모든 HTTP(S) 사이트에서 값 없는 요청·쿠키 메타데이터를 관찰하고 약관·개인정보 위험을 로컬에서 분석합니다.",
     actionTitle: "unveily",
     languageLabel: "언어",
     languageAuto: "자동",
@@ -23,12 +25,16 @@ const FALLBACK_MESSAGES = {
     analyzePage: "현재 페이지 분석",
     analyzeCookies: "쿠키 분석",
     analyzePaste: "붙여넣기 분석",
+    enableCompanionOverlay: "컴패니언 오버레이 켜기",
+    disableCompanionOverlay: "컴패니언 오버레이 끄기",
+    companionOverlayDisclosure: "켜면 모든 지원 HTTP(S) 페이지의 웹사이트 DOM에 최근 분석 위험도 오버레이를 표시합니다. 사이트가 오버레이를 감지하거나 가릴 수 있으며, 알 수 없음은 안전 판정이 아닙니다.",
     saveSnapshot: "기준 저장",
     resetObservation: "관찰 초기화",
     exportMarkdown: "Markdown 저장",
     exportJson: "JSON 저장",
-    savePolicy: "정책 저장",
-    deletePolicy: "저장본 삭제",
+    savePolicy: "정책 변경 감시 시작",
+    policyMonitoringDisclosure: "저장하면 지금 정책 호스트에 다시 접속합니다. 이후 자동 변경 확인은 URL별 최대 6시간에 한 번이며 브라우저 상태에 따라 늦어질 수 있습니다. 사용자가 ‘변경 확인’을 누르면 6시간 안에도 다시 접속합니다. 요청에는 쿠키·로그인 자격 증명이 포함되지 않지만 정책 호스트에 IP 주소, User-Agent, 요청 시각이 노출됩니다. 저장된 정책을 삭제하면 이 URL의 감시가 중지됩니다.",
+    deletePolicy: "감시 중지 및 저장본 삭제",
     checkPolicies: "변경 확인",
     pasteLabel: "약관 또는 개인정보처리방침 원문",
     pastePlaceholder: "분석할 약관이나 개인정보처리방침을 붙여넣으세요.",
@@ -37,21 +43,28 @@ const FALLBACK_MESSAGES = {
     severityMedium: "주의",
     severityLow: "낮음",
     statusAnalysisComplete: "분석 완료: 약 $1개 단어",
+    statusAnalysisCompleteNoObservation: "문서 분석 완료: 약 $1개 단어. 이 사이트의 상시 관찰이 중지되어 네트워크·쿠키 비교는 비어 있습니다.",
     statusAnalyzingPage: "현재 페이지 텍스트와 네트워크 요청을 읽는 중입니다.",
     statusNoActiveTab: "활성화된 탭을 찾을 수 없습니다.",
     statusUnsupportedPageScheme: "현재 탭은 분석 대상이 아닙니다. 웹사이트(http/https) 탭에서 실행하세요.",
     statusPageScriptUnavailable: "현재 페이지에서 분석 스크립트를 찾지 못했습니다. 페이지 이동 직후거나 보안 제한 페이지일 수 있습니다. 새로고침 후 잠시 후 다시 시도하세요.",
     statusNoPagePayload: "현재 탭이 응답하지 않습니다. 페이지를 새로고침 후 다시 시도하세요.",
+    statusPageChangedDuringAnalysis: "분석 중 페이지가 바뀌어 이전 페이지의 결과를 폐기했습니다. 현재 페이지에서 다시 실행하세요.",
     statusPageReadFailed: "현재 페이지를 읽지 못했습니다. 페이지를 새로고침한 뒤 다시 시도하거나 붙여넣기 분석을 사용하세요.",
     statusCookieAnalyzing: "쿠키 배너, 허용 선택지, 저장소 동작을 읽는 중입니다.",
     statusCookieComplete: "쿠키 분석 완료: 동의 UI $1, 쿠키 $2개",
+    statusCookieObservationUnavailable: "이 사이트의 상시 관찰이 중지되어 누적 네트워크·쿠키 동작을 비교할 수 없습니다.",
     statusCookieFailed: "쿠키 분석을 실행하지 못했습니다. 페이지를 새로고침한 뒤 다시 시도하세요.",
-    statusPolicySaved: "현재 정책 스냅샷을 로컬에 저장했습니다.",
+    statusPolicySaved: "정책 변경 감시를 시작했습니다. 지금 다시 불러온 기준을 로컬에 저장했으며 이 URL을 이후 최대 6시간에 한 번 확인합니다.",
+    statusPolicyRefetchFailed: "정책 URL을 안전하게 다시 불러오지 못해 저장하지 않았습니다. 페이지가 공개된 HTTPS 정책 문서인지 확인한 뒤 다시 시도하세요.",
+    statusPolicyRequiresUrl: "붙여넣은 텍스트는 URL이 없어 정책 스냅샷으로 저장할 수 없습니다.",
+    statusPolicyRequiresHttps: "정책 변경 감시에는 자격 증명·fragment·알 수 없는 query parameter가 없는 안전한 HTTPS 정책 URL이 필요합니다. 현재 페이지 분석은 계속 사용할 수 있습니다.",
+    statusNeedPolicyAnalysis: "정책 문서로 판정된 URL 페이지를 먼저 분석하세요.",
     statusNeedPageAnalysis: "먼저 현재 페이지 분석을 실행하세요.",
-    statusPolicyDeleted: "이 사이트의 로컬 정책 저장본을 삭제했습니다.",
+    statusPolicyDeleted: "저장된 정책을 삭제하고 이 URL의 변경 감시를 중지했습니다.",
     statusPolicyDeleteFailed: "삭제할 저장본의 사이트를 찾지 못했습니다.",
     statusCheckingPolicies: "저장된 정책 URL을 확인하는 중입니다.",
-    statusPoliciesChecked: "정책 확인 완료: $1개 확인, $2개 변경, $3개 알림",
+    statusPoliciesChecked: "정책 확인 완료: $1개 확인, $2개 변경, $3개 알림, $4개 실패",
     statusPoliciesCheckFailed: "저장된 정책 확인에 실패했습니다.",
     statusJsonSaved: "JSON 리포트를 저장했습니다.",
     statusMarkdownSaved: "Markdown 리포트를 저장했습니다.",
@@ -60,6 +73,9 @@ const FALLBACK_MESSAGES = {
     statusObservationReset: "관찰 데이터를 초기화했습니다. 페이지를 새로고침하거나 동의 선택 후 다시 분석하세요.",
     statusObservationResetFailed: "관찰 초기화에 실패했습니다.",
     statusLanguageUpdated: "언어가 변경되어 즉시 적용됩니다. 보고서는 새로 분석하면 반영된 언어로 다시 표시됩니다.",
+    statusCompanionOverlayEnabled: "모든 지원 웹페이지에서 컴패니언 오버레이를 켰습니다.",
+    statusCompanionOverlayDisabled: "컴패니언 오버레이를 껐습니다.",
+    statusCompanionOverlayUpdateFailed: "컴패니언 오버레이 설정을 변경하지 못했습니다. 팝업을 다시 열어 재시도하세요.",
     pastedTextSource: "붙여넣은 텍스트",
     currentPageSource: "현재 페이지",
     cookieAnalysisSource: "쿠키 분석",
@@ -157,8 +173,8 @@ const FALLBACK_MESSAGES = {
     noThirdPartyDomain: "제3자 도메인이 감지되지 않았습니다.",
     noVendors: "분류된 벤더가 없습니다.",
     optionTitle: "unveily 설정",
-    optionsHeading: "로컬 벤더 룰",
-    optionsDescription: "사용자 정의 도메인 분류는 이 브라우저의 로컬 저장소에만 저장됩니다.",
+    optionsHeading: "unveily 개인정보 및 로컬 설정",
+    optionsDescription: "상시 관찰은 기본으로 켜져 있습니다. 모든 허용된 HTTP/HTTPS 사이트에서 값 없는 요청·쿠키 메타데이터를 처리하고, 사용자 입력·편집 영역을 제외한 제한된 표시 텍스트로 정책 가능성을 로컬에서 판정합니다. 관찰 기록은 이 브라우저에만 저장됩니다. 정책으로 보일 때만 제한된 발췌문이 서비스 워커로 전달되며 관찰 기록이나 원격 서버에는 저장·전송되지 않습니다. 이 자동 메타데이터 관찰과 텍스트 스캔은 아래에서 함께 끄거나 사이트별로 제외할 수 있습니다.",
     vendorName: "벤더명",
     vendorPlaceholder: "예: NICE 본인인증",
     domainPatterns: "도메인 패턴",
@@ -175,20 +191,45 @@ const FALLBACK_MESSAGES = {
     save: "저장",
     cancel: "취소",
     savedRules: "저장된 룰",
-    savedSnapshots: "저장된 정책 스냅샷",
+    savedSnapshots: "저장된 정책 변경 감시",
     noSavedRules: "저장된 사용자 룰이 없습니다.",
-    noSavedSnapshots: "저장된 정책 스냅샷이 없습니다.",
+    noSavedSnapshots: "저장된 정책 변경 감시가 없습니다.",
+    policyCheckNeverAttempted: "자동 변경 확인 기록이 없습니다.",
+    policyCheckLastSucceeded: "마지막 자동 확인 성공: $1",
+    policyCheckLastFailed: "마지막 자동 확인 실패: $1 · 연속 $2회 · 원인: $3",
+    policyCheckErrorNetwork: "네트워크 연결",
+    policyCheckErrorTimeout: "응답 시간 초과",
+    policyCheckErrorHttpStatus: "서버 응답 상태",
+    policyCheckErrorRedirect: "허용되지 않은 리디렉션",
+    policyCheckErrorContentType: "지원하지 않는 문서 형식",
+    policyCheckErrorResponseTooLarge: "문서 크기 제한 초과",
+    policyCheckErrorInvalidUrl: "안전하지 않거나 유효하지 않은 URL",
+    policyCheckErrorNotPolicy: "정책 문서로 확인되지 않음",
+    policyCheckErrorUnknown: "분류되지 않은 오류",
     edit: "수정",
     delete: "삭제",
     statusRuleInvalid: "벤더명, 도메인 패턴, 필요 정책 섹션을 확인하세요.",
     statusRuleSaved: "로컬 사용자 룰을 저장했습니다.",
     statusRuleDeleted: "로컬 사용자 룰을 삭제했습니다.",
     statusRuleLoaded: "수정할 룰을 불러왔습니다.",
-    statusSnapshotDeleted: "정책 스냅샷을 삭제했습니다."
+    statusSnapshotDeleted: "저장된 정책을 삭제하고 해당 URL의 변경 감시를 중지했습니다.",
+    statusStorageFailed: "로컬 저장소 작업에 실패했습니다. 확장 프로그램을 다시 열고 시도하세요.",
+    statusStorageIsolationUnavailable: "로컬 저장소를 신뢰 컨텍스트로 격리하지 못했습니다. 상시 관찰과 저장된 설정·정책 감시는 중지됩니다. 저장 데이터를 사용하지 않는 현재 페이지·쿠키·붙여넣기 분석과 결과 내보내기는 계속 사용할 수 있지만 누적 관찰 비교는 비어 있습니다.",
+    confirmDeleteRule: "이 사용자 룰을 삭제할까요?",
+    confirmDeleteSnapshot: "이 저장된 정책을 삭제하고 해당 URL의 변경 감시를 중지할까요?",
+    observationControlsTitle: "상시 관찰 제어",
+    observationControlsDescription: "관찰 기록은 값 없는 제한된 메타데이터이며 최상위 사이트 이동 시 분리됩니다. 관찰을 끄거나 정확한 origin을 제외하면 해당 세션 기록도 삭제됩니다.",
+    observationEnabledLabel: "HTTP/HTTPS 사이트 상시 관찰 사용",
+    excludedOriginsLabel: "관찰 제외 사이트",
+    excludedOriginsPlaceholder: "예: https://bank.example.com (한 줄에 하나)",
+    saveObservationSettings: "관찰 설정 저장",
+    statusObservationOriginsTooMany: "관찰 제외 사이트는 최대 100개까지 저장할 수 있습니다. 항목을 줄인 뒤 다시 저장하세요.",
+    statusObservationOriginInvalid: "유효하지 않은 제외 사이트가 있습니다. 각 줄에 경로 없이 HTTP(S) origin 또는 호스트를 입력하세요.",
+    statusObservationSettingsSaved: "관찰 설정을 저장했습니다. 제외된 사이트의 기존 세션 데이터도 삭제됩니다."
   },
   en: {
     appName: "unveily",
-    appDescription: "Summarize terms and privacy policies, highlighting risky clauses and collected data.",
+    appDescription: "By default, observes value-free request and cookie metadata on all HTTP(S) sites and analyzes terms and privacy risks locally.",
     actionTitle: "unveily",
     languageLabel: "Language",
     languageAuto: "Auto",
@@ -202,12 +243,16 @@ const FALLBACK_MESSAGES = {
     analyzePage: "Analyze page",
     analyzeCookies: "Cookie analysis",
     analyzePaste: "Paste analysis",
+    enableCompanionOverlay: "Turn on companion overlay",
+    disableCompanionOverlay: "Turn off companion overlay",
+    companionOverlayDisclosure: "When enabled, shows the latest analysis risk overlay in the website DOM on every supported HTTP(S) page. Sites can detect or cover it, and unknown does not mean safe.",
     saveSnapshot: "Save baseline",
     resetObservation: "Reset observation",
     exportMarkdown: "Save Markdown",
     exportJson: "Save JSON",
-    savePolicy: "Save policy",
-    deletePolicy: "Delete saved",
+    savePolicy: "Start policy monitoring",
+    policyMonitoringDisclosure: "Saving refetches this policy host now. Automatic change checks then contact each URL at most once every six hours (the browser may delay checks). Choosing ‘Check changes’ can contact it again within six hours. Requests omit cookies and login credentials, but reveal your IP address, User-Agent, and request time to the policy host. Deleting the saved policy stops monitoring that URL.",
+    deletePolicy: "Stop monitoring & delete",
     checkPolicies: "Check changes",
     pasteLabel: "Terms or privacy policy text",
     pastePlaceholder: "Paste the terms or privacy policy text to analyze.",
@@ -216,21 +261,28 @@ const FALLBACK_MESSAGES = {
     severityMedium: "Caution",
     severityLow: "Low",
     statusAnalysisComplete: "Analysis complete: about $1 words",
+    statusAnalysisCompleteNoObservation: "Document analysis complete: about $1 words. Passive observation is paused for this site, so network and cookie comparisons are empty.",
     statusAnalyzingPage: "Reading page text and network activity.",
     statusNoActiveTab: "Could not find the active tab.",
     statusUnsupportedPageScheme: "Current tab is not supported for analysis. Open an http/https page.",
     statusPageScriptUnavailable: "Could not locate analysis script in the current page. The page may be newly loaded or restricted. Refresh and retry after a moment.",
     statusNoPagePayload: "The current tab did not return page data. Refresh and retry.",
+    statusPageChangedDuringAnalysis: "The page changed during analysis, so the stale result was discarded. Run it again on the current page.",
     statusPageReadFailed: "Could not read the current page. Refresh and retry, or use paste analysis.",
     statusCookieAnalyzing: "Reading cookie banner, consent choices, and storage activity.",
     statusCookieComplete: "Cookie analysis complete: consent UI $1, cookies $2",
+    statusCookieObservationUnavailable: "Passive observation is paused for this site, so accumulated network and cookie behavior cannot be compared.",
     statusCookieFailed: "Could not run cookie analysis. Refresh the page and try again.",
-    statusPolicySaved: "Saved the current policy snapshot locally.",
+    statusPolicySaved: "Policy monitoring started. A freshly fetched baseline was saved locally, and this URL will be checked at most once every six hours afterward.",
+    statusPolicyRefetchFailed: "The policy URL could not be fetched safely, so no snapshot was saved. Confirm that it is a public HTTPS policy document and try again.",
+    statusPolicyRequiresUrl: "Pasted text has no URL and cannot be saved as a monitored policy snapshot.",
+    statusPolicyRequiresHttps: "Policy monitoring requires a safe HTTPS policy URL without credentials, fragments, or unknown query parameters. Current-page analysis remains available.",
+    statusNeedPolicyAnalysis: "Analyze a URL page that is recognized as a policy document first.",
     statusNeedPageAnalysis: "Run current page analysis first.",
-    statusPolicyDeleted: "Deleted the local policy snapshot for this site.",
+    statusPolicyDeleted: "Deleted the saved policy and stopped monitoring this URL.",
     statusPolicyDeleteFailed: "Could not find a saved snapshot for this site.",
     statusCheckingPolicies: "Checking saved policy URLs.",
-    statusPoliciesChecked: "Policy check complete: $1 checked, $2 changed, $3 notified",
+    statusPoliciesChecked: "Policy check complete: $1 checked, $2 changed, $3 notified, $4 failed",
     statusPoliciesCheckFailed: "Failed to check saved policies.",
     statusJsonSaved: "Saved the JSON report.",
     statusMarkdownSaved: "Saved the Markdown report.",
@@ -239,6 +291,9 @@ const FALLBACK_MESSAGES = {
     statusObservationReset: "Cleared observation data. Refresh the page or choose consent options, then analyze again.",
     statusObservationResetFailed: "Failed to reset observation data.",
     statusLanguageUpdated: "Language setting has been applied. Re-run analysis to refresh report text in the selected language.",
+    statusCompanionOverlayEnabled: "The companion overlay is on for all supported websites.",
+    statusCompanionOverlayDisabled: "The companion overlay is off.",
+    statusCompanionOverlayUpdateFailed: "Could not change the companion overlay setting. Reopen the popup and try again.",
     pastedTextSource: "Pasted text",
     currentPageSource: "Current page",
     cookieAnalysisSource: "Cookie analysis",
@@ -336,8 +391,8 @@ const FALLBACK_MESSAGES = {
     noThirdPartyDomain: "No third-party domain detected.",
     noVendors: "No classified vendors.",
     optionTitle: "unveily Settings",
-    optionsHeading: "Local vendor rules",
-    optionsDescription: "Custom domain classifications are stored only in this browser's local storage.",
+    optionsHeading: "unveily privacy and local settings",
+    optionsDescription: "Always-on observation is enabled by default. On every allowed HTTP/HTTPS site, it processes value-free request and cookie metadata and locally assesses policy likelihood from bounded visible text that excludes user-input and editable areas. Observation history is stored only in this browser. Only a bounded excerpt from policy-like pages is sent to the service worker; it is not stored in observation history or sent to a remote server. Pause this automatic metadata observation and text scan together, or exclude sites below.",
     vendorName: "Vendor name",
     vendorPlaceholder: "e.g. NICE identity verification",
     domainPatterns: "Domain patterns",
@@ -354,16 +409,41 @@ const FALLBACK_MESSAGES = {
     save: "Save",
     cancel: "Cancel",
     savedRules: "Saved rules",
-    savedSnapshots: "Saved policy snapshots",
+    savedSnapshots: "Saved policy monitoring",
     noSavedRules: "No custom rules saved.",
-    noSavedSnapshots: "No policy snapshots saved.",
+    noSavedSnapshots: "No saved policy monitoring is active.",
+    policyCheckNeverAttempted: "No automatic change check has been recorded.",
+    policyCheckLastSucceeded: "Last automatic check succeeded: $1",
+    policyCheckLastFailed: "Last automatic check failed: $1 · $2 consecutive failures · Cause: $3",
+    policyCheckErrorNetwork: "Network connection",
+    policyCheckErrorTimeout: "Response timeout",
+    policyCheckErrorHttpStatus: "Server response status",
+    policyCheckErrorRedirect: "Disallowed redirect",
+    policyCheckErrorContentType: "Unsupported document type",
+    policyCheckErrorResponseTooLarge: "Document size limit exceeded",
+    policyCheckErrorInvalidUrl: "Unsafe or invalid URL",
+    policyCheckErrorNotPolicy: "Document was not recognized as a policy",
+    policyCheckErrorUnknown: "Unclassified error",
     edit: "Edit",
     delete: "Delete",
     statusRuleInvalid: "Check vendor name, domain patterns, and required policy sections.",
     statusRuleSaved: "Saved the local custom rule.",
     statusRuleDeleted: "Deleted the local custom rule.",
     statusRuleLoaded: "Loaded the rule for editing.",
-    statusSnapshotDeleted: "Deleted the policy snapshot."
+    statusSnapshotDeleted: "Deleted the saved policy and stopped monitoring that URL.",
+    statusStorageFailed: "The local storage operation failed. Reopen the extension and try again.",
+    statusStorageIsolationUnavailable: "Local storage could not be restricted to trusted contexts. Always-on observation, saved settings, and policy monitoring are paused. Current-page, cookie, and pasted-text analysis plus report export remain available without saved local data, but accumulated observation comparisons are empty.",
+    confirmDeleteRule: "Delete this custom rule?",
+    confirmDeleteSnapshot: "Delete this saved policy and stop monitoring that URL?",
+    observationControlsTitle: "Always-on observation controls",
+    observationControlsDescription: "Observation records are bounded, value-free metadata isolated on top-level navigation. Pausing observation or excluding an exact origin also removes its session records.",
+    observationEnabledLabel: "Observe HTTP/HTTPS sites while the extension is enabled",
+    excludedOriginsLabel: "Excluded sites",
+    excludedOriginsPlaceholder: "Example: https://bank.example.com (one per line)",
+    saveObservationSettings: "Save observation settings",
+    statusObservationOriginsTooMany: "You can save at most 100 excluded sites. Remove some entries and try again.",
+    statusObservationOriginInvalid: "An excluded site is invalid. Enter an HTTP(S) origin or host without a path on each line.",
+    statusObservationSettingsSaved: "Saved observation settings. Existing sessions for excluded sites are also removed."
   }
 };
 
@@ -416,7 +496,7 @@ async function loadLocalePreference() {
   loadedLocalePreference = true;
 
   try {
-    const storage = globalThis.chrome?.storage?.local;
+    const { storage } = await trustedLocaleStorage();
     if (!storage?.get) {
       setLocaleState(AUTO_LOCALE);
       return;
@@ -431,7 +511,12 @@ async function loadLocalePreference() {
     setLocaleState(nextLocale);
     if (!hasNewValue && nextLocale !== AUTO_LOCALE) {
       try {
-        await storage.set({ [LOCALE_PREFERENCE_KEY]: nextLocale });
+        const { storage: migrationStorage, gateFailed } = await trustedLocaleStorage();
+        if (gateFailed) {
+          setLocaleState(AUTO_LOCALE);
+          return;
+        }
+        await migrationStorage?.set?.({ [LOCALE_PREFERENCE_KEY]: nextLocale });
       } catch {
         // Best-effort migration to the latest key.
       }
@@ -450,10 +535,30 @@ export async function setLocalePreference(value) {
   const nextLocale = normalizeLocale(value);
   setLocaleState(nextLocale);
   try {
-    await globalThis.chrome?.storage?.local?.set?.({ [LOCALE_PREFERENCE_KEY]: nextLocale });
+    const { storage, gateFailed } = await trustedLocaleStorage();
+    if (gateFailed) {
+      setLocaleState(AUTO_LOCALE);
+      return;
+    }
+    await storage?.set?.({ [LOCALE_PREFERENCE_KEY]: nextLocale });
   } catch {
     // Storage is optional in test and some runtime contexts.
   }
+}
+
+async function trustedLocaleStorage() {
+  let storage;
+  try {
+    storage = globalThis.chrome?.storage?.local;
+  } catch {
+    return { storage: null, gateFailed: true };
+  }
+  if (!storage) return { storage: null, gateFailed: false };
+  const trusted = await ensureTrustedLocalStorage(storage);
+  return {
+    storage: trusted ? storage : null,
+    gateFailed: !trusted
+  };
 }
 
 export async function initI18n(root = document) {
@@ -487,8 +592,7 @@ export function t(key, substitutions = []) {
   return applySubstitutions(fallbackMessage(locale, key), substitutions);
 }
 
-export async function applyI18n(root = document) {
-  await loadLocalePreference();
+function applyResolvedI18n(root) {
   root.documentElement?.setAttribute("lang", localeCode());
   root.title = t(root.querySelector("title")?.dataset.i18n || "appName");
 
@@ -502,4 +606,14 @@ export async function applyI18n(root = document) {
   root.querySelectorAll("[data-i18n-placeholder]").forEach((element) => {
     element.setAttribute("placeholder", t(element.dataset.i18nPlaceholder));
   });
+}
+
+export async function applyI18n(root = document) {
+  await loadLocalePreference();
+  applyResolvedI18n(root);
+}
+
+export function applyI18nWithoutStorage(root = document) {
+  setLocaleState(AUTO_LOCALE);
+  applyResolvedI18n(root);
 }

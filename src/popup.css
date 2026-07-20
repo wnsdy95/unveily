@@ -13,7 +13,8 @@ body {
   width: 420px;
   height: 600px;
   margin: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: #f5f7fa;
 }
 
@@ -24,9 +25,9 @@ textarea {
 
 .app {
   display: flex;
-  height: 600px;
+  min-height: 600px;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .topbar {
@@ -100,6 +101,21 @@ footer p {
   gap: 8px;
   padding: 12px 18px;
   background: #ffffff;
+}
+
+.companion-overlay-action,
+.policy-monitor-action {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 6px;
+}
+
+.companion-overlay-disclosure,
+.policy-monitor-disclosure {
+  margin: 0;
+  color: #5d6b7c;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .actions[hidden],
@@ -179,11 +195,11 @@ textarea {
 
 .result {
   display: flex;
-  flex: 1;
+  flex: 1 0 auto;
   flex-direction: column;
   gap: 12px;
-  min-height: 0;
-  overflow-y: auto;
+  min-height: 120px;
+  overflow: visible;
   padding: 0 18px 18px;
 }
 
