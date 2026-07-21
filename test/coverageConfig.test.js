@@ -45,6 +45,8 @@ test("syntax-checks extension sources and repository scripts with a portable she
 test("installs locked dependencies and gates the packaged extension in real Chrome", () => {
   assert.equal(packageJson.scripts["package:extension"], "node scripts/package-extension.mjs");
   assert.equal(packageJson.scripts["test:package"], "node scripts/package-extension.mjs --verify");
+  assert.match(workflow, /uses:\s*actions\/checkout@[0-9a-f]{40}\s*# v7\.0\.1/);
+  assert.match(workflow, /uses:\s*actions\/setup-node@[0-9a-f]{40}\s*# v7\.0\.0/);
   assert.match(workflow, /name:\s*Install locked dependencies\s*\n\s*run:\s*npm ci/);
   assert.match(
     workflow,
