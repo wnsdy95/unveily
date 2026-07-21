@@ -61,7 +61,7 @@ unveily is rule-based by design. It is useful for fast triage, but it is not leg
 - Improve generated report localization. The popup is localized, but exported Markdown report headings are currently English-first.
 - Add stronger vendor and tracker classification. The current bundled ruleset is intentionally small and local.
 - Add clearer per-site history and comparison views beyond the current saved snapshot and change detection flow.
-- Prepare release packaging and Chrome Web Store distribution. The repository can be loaded unpacked, but it is not yet a polished store release.
+- Prepare the Chrome Web Store listing, review assets, and submission record. The repository now creates a reproducible allowlisted ZIP, but it is not yet a reviewed or published store release.
 
 ## Limitations
 
@@ -106,12 +106,14 @@ Chrome 140 or newer is required. The extension relies on partitioned-cookie meta
 npm ci
 npm test
 npm run check
+npm run package:extension
+npm run test:package
 npm run test:e2e:chrome
 ```
 
-The syntax check covers both extension modules in `src/` and repository maintenance or CI scripts in `scripts/`.
+The syntax check covers both extension modules in `src/` and repository maintenance or CI scripts in `scripts/`. `npm run package:extension` creates `dist/unveily-<version>.zip` from an explicit runtime-file allowlist with fixed ZIP metadata; `npm run test:package` verifies its paths, checksums, content, manifest/import references, and byte-for-byte reproducibility. Dependencies, tests, repository scripts, reports, and local files are excluded.
 
-`npm test` is the fast Node suite with Chrome API mocks. `npm run test:e2e:chrome` launches a real Chrome 140+ installation, loads the unpacked extension in a clean temporary profile, and uses controlled localhost fixtures to verify the companion-overlay path, including explicit enablement, hidden-tab DOM idling/resume while value-free request observation continues, popup analysis, continuous colors, stale-document rejection, document isolation, and Manifest V3 worker recovery. Set `E2E_CHROME_PATH` when Chrome is installed outside the detected platform paths.
+`npm test` is the fast Node suite with Chrome API mocks. `npm run test:e2e:chrome` launches a real Chrome 140+ installation, loads the unpacked extension in a clean temporary profile, and uses controlled localhost fixtures to verify the companion-overlay path, including explicit enablement, hidden-tab DOM idling/resume while value-free request observation continues, popup analysis, continuous colors, stale-document rejection, document isolation, and Manifest V3 worker recovery. Set `E2E_CHROME_PATH` when Chrome is installed outside the detected platform paths; CI runs the same command headlessly.
 
 Complete [MANUAL_TESTING.md](MANUAL_TESTING.md) before a release for the security, privacy, browser-frame, and lifecycle behaviors that are not automated by this focused E2E baseline.
 

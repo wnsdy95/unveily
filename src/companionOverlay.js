@@ -381,7 +381,16 @@
       return false;
     }
     if (message.type === "COMPANION_OVERLAY_STATE") {
-      applyRevision(message.generation, message.revision, () => renderState(message.state));
+      const applied = applyRevision(message.generation, message.revision, () =>
+        renderState(message.state)
+      );
+      if (applied && !enabled) {
+        // A state-only push can overtake the initial visibility response. It
+        // must not enable the companion by itself, but it also must not make
+        // the authoritative response stale forever. Re-read visibility and
+        // allow the equal snapshot revision produced by that state push.
+        requestAuthoritativeState({ allowEqual: true });
+      }
       sendResponse?.({ ok: true });
       return false;
     }

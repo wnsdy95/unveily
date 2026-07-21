@@ -104,6 +104,7 @@ footer p {
 }
 
 .companion-overlay-action,
+.observation-settings-action,
 .policy-monitor-action {
   display: grid;
   grid-column: 1 / -1;
@@ -111,6 +112,7 @@ footer p {
 }
 
 .companion-overlay-disclosure,
+.observation-settings-disclosure,
 .policy-monitor-disclosure {
   margin: 0;
   color: #5d6b7c;
@@ -158,6 +160,13 @@ button.secondary {
 
 button:hover {
   filter: brightness(0.97);
+}
+
+button:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #84adff;
+  outline-offset: 2px;
 }
 
 .paste-panel {

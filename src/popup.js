@@ -56,6 +56,7 @@ const savePolicyButton = document.querySelector("#savePolicyButton");
 const deletePolicyButton = document.querySelector("#deletePolicyButton");
 const checkPoliciesButton = document.querySelector("#checkPoliciesButton");
 const companionOverlayToggleButton = document.querySelector("#companionOverlayToggleButton");
+const openObservationSettingsButton = document.querySelector("#openObservationSettingsButton");
 const menuToggleButton = document.querySelector("#menuToggleButton");
 const actionsPanel = document.querySelector("#actionsPanel");
 const modeButtons = Array.from(document.querySelectorAll(".mode-button"));
@@ -1598,6 +1599,17 @@ async function toggleCompanionOverlay() {
   renderCompanionOverlayPreference();
 }
 
+async function openObservationSettings() {
+  if (!openObservationSettingsButton) return;
+  openObservationSettingsButton.disabled = true;
+  try {
+    await chrome.runtime.openOptionsPage();
+  } catch {
+    openObservationSettingsButton.disabled = false;
+    setStatus(t("statusObservationSettingsOpenFailed"), true);
+  }
+}
+
 async function updateToolbarRiskIndicator(tabId, indicator) {
   if (!tabId) return;
   try {
@@ -2229,6 +2241,7 @@ function bindPopupEvents() {
   exportMarkdownButton.addEventListener("click", () => exportLatestReport("markdown"));
   exportJsonButton.addEventListener("click", () => exportLatestReport("json"));
   policyText.addEventListener("input", queuePastedTextAnalysis);
+  openObservationSettingsButton?.addEventListener("click", openObservationSettings);
 }
 
 function bindTrustedLocalStorageEvents() {

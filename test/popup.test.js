@@ -193,6 +193,36 @@ test("toggles the global companion overlay only through the trusted preference c
   assert.match(popupSource, /void loadCompanionOverlayPreference\(\);/);
 });
 
+test("opens the always-on observation controls without mutating the default setting", () => {
+  assert.match(popupHtml, /id="openObservationSettingsButton"/);
+  assert.match(
+    popupHtml,
+    /aria-describedby="observationSettingsDefault observationSettingsDisclosure"/
+  );
+  assert.match(popupHtml, /id="observationSettingsDefault"[^>]*data-i18n="appDescription"/);
+  assert.match(
+    popupHtml,
+    /id="observationSettingsDisclosure"[^>]*data-i18n="observationControlsDescription"/
+  );
+  assert.match(popupHtml, /기본적으로 모든 HTTP\(S\) 사이트/);
+  assert.match(popupHtml, /관찰을 끄거나 정확한 origin을 제외/);
+
+  const openSettings = popupSource.match(
+    /async function openObservationSettings\(\) \{([\s\S]*?)\n\}/
+  );
+  assert.ok(openSettings, "observation settings opener should be present");
+  assert.match(openSettings[1], /await chrome\.runtime\.openOptionsPage\(\);/);
+  assert.match(openSettings[1], /statusObservationSettingsOpenFailed/);
+  assert.doesNotMatch(openSettings[1], /storage|sendMessage|tabs\.|window\.open/);
+
+  const generalBindings = popupSource.match(/function bindPopupEvents\(\) \{([\s\S]*?)\n\}/);
+  assert.ok(generalBindings);
+  assert.match(
+    generalBindings[1],
+    /openObservationSettingsButton\?\.addEventListener\("click", openObservationSettings\)/
+  );
+});
+
 test("scrolls the whole popup without collapsing long analysis results", () => {
   const bodyRule = popupCss.match(/body\s*\{([^}]*)\}/)?.[1] || "";
   const appRule = popupCss.match(/\.app\s*\{([^}]*)\}/)?.[1] || "";

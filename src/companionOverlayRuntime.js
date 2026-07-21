@@ -68,6 +68,7 @@ export function createCompanionOverlayRuntime({
 }) {
   const revisions = new Map();
   let nextRevision = 0;
+  let visibilityEpoch = 0;
   const broadcastConcurrency = Math.max(1, Math.min(8, Math.floor(maxBroadcastConcurrency) || 1));
 
   function currentRevision(tabId) {
@@ -120,8 +121,12 @@ export function createCompanionOverlayRuntime({
     });
   }
 
-  async function deliver(tabId, type, enabled = isEnabled()) {
+  async function deliver(tabId, type, expectedVisibilityEpoch = null) {
     if (!Number.isInteger(tabId) || tabId < 0) return;
+    const isVisibility = type === "COMPANION_OVERLAY_VISIBILITY";
+    const visibilityIsCurrent = () =>
+      !isVisibility || expectedVisibilityEpoch === visibilityEpoch;
+    if (!visibilityIsCurrent() || (!isVisibility && !isEnabled())) return;
     let stamp;
     try {
       stamp = await advanceRevision(tabId);
@@ -129,14 +134,29 @@ export function createCompanionOverlayRuntime({
       await forceDisable(tabId);
       return;
     }
+    if (!visibilityIsCurrent() || (!isVisibility && !isEnabled())) return;
     const context = await getCurrentTopDocument(tabId);
-    if (!context || stamp.revision !== currentRevision(tabId)) return;
+    if (
+      !context ||
+      stamp.revision !== currentRevision(tabId) ||
+      !visibilityIsCurrent() ||
+      (!isVisibility && !isEnabled())
+    ) {
+      return;
+    }
+    const enabled = isVisibility ? isEnabled() : true;
     const state = enabled ? await getState(tabId) : createUnknownState();
-    if (stamp.revision !== currentRevision(tabId)) return;
+    if (
+      stamp.revision !== currentRevision(tabId) ||
+      !visibilityIsCurrent() ||
+      (isVisibility ? enabled !== isEnabled() : !isEnabled())
+    ) {
+      return;
+    }
     send(
       tabId,
       context.documentId,
-      type === "COMPANION_OVERLAY_VISIBILITY"
+      isVisibility
         ? { type, enabled, ...stamp, state }
         : { type, ...stamp, state }
     );
@@ -148,22 +168,23 @@ export function createCompanionOverlayRuntime({
   }
 
   async function broadcast() {
+    const epoch = ++visibilityEpoch;
     let tabs;
     try {
       tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
     } catch {
       return;
     }
-    const enabled = isEnabled();
+    if (epoch !== visibilityEpoch) return;
     const tabIds = tabs
       .filter((tab) => Number.isInteger(tab?.id) && tab.id >= 0)
       .map((tab) => tab.id);
     let nextIndex = 0;
     async function worker() {
-      while (nextIndex < tabIds.length) {
+      while (epoch === visibilityEpoch && nextIndex < tabIds.length) {
         const tabId = tabIds[nextIndex];
         nextIndex += 1;
-        await deliver(tabId, "COMPANION_OVERLAY_VISIBILITY", enabled);
+        await deliver(tabId, "COMPANION_OVERLAY_VISIBILITY", epoch);
       }
     }
     await Promise.all(

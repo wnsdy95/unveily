@@ -16,6 +16,9 @@ test("provides Chrome i18n manifest messages for Korean and English", () => {
     "statusCompanionOverlayEnabled",
     "statusCompanionOverlayDisabled",
     "statusCompanionOverlayUpdateFailed",
+    "observationControlsTitle",
+    "observationControlsDescription",
+    "statusObservationSettingsOpenFailed",
     "companionTitle",
     "companionUnknown",
     "companionUnavailable",
@@ -58,6 +61,22 @@ test("localizes the global website overlay toggle and its trust boundary", () =>
   assert.match(enMessages.companionOverlayDisclosure.message, /website DOM/);
   assert.match(enMessages.companionOverlayDisclosure.message, /detect or cover/);
   assert.match(enMessages.companionOverlayDisclosure.message, /unknown does not mean safe/);
+});
+
+test("localizes the popup entry point for global pause and exact-origin exclusions", () => {
+  assert.match(koMessages.appDescription.message, /기본적으로/);
+  assert.match(koMessages.appDescription.message, /모든 HTTP\(S\) 사이트/);
+  assert.equal(koMessages.observationControlsTitle.message, "상시 관찰 제어");
+  assert.match(koMessages.observationControlsDescription.message, /관찰을 끄거나/);
+  assert.match(koMessages.observationControlsDescription.message, /정확한 origin을 제외/);
+
+  assert.match(enMessages.appDescription.message, /By default/);
+  assert.match(enMessages.appDescription.message, /all HTTP\(S\) sites/);
+  assert.equal(enMessages.observationControlsTitle.message, "Always-on observation controls");
+  assert.match(enMessages.observationControlsDescription.message, /Pausing observation/);
+  assert.match(enMessages.observationControlsDescription.message, /excluding an exact origin/);
+  assert.match(koMessages.statusObservationSettingsOpenFailed.message, /설정 화면을 열지 못했습니다/);
+  assert.match(enMessages.statusObservationSettingsOpenFailed.message, /Could not open observation settings/);
 });
 
 test("falls back to local UI messages outside Chrome", async () => {
@@ -171,6 +190,7 @@ test("respects manual locale override", async () => {
   assert.match(t("companionOverlayDisclosure"), /website DOM/);
   assert.match(t("statusCompanionOverlayEnabled"), /all supported websites/);
   assert.match(t("statusCompanionOverlayUpdateFailed"), /Reopen the popup/);
+  assert.match(t("statusObservationSettingsOpenFailed"), /Could not open observation settings/);
   assert.match(t("policyMonitoringDisclosure"), /refetches this policy host now/);
   assert.match(t("policyMonitoringDisclosure"), /at most once every six hours/);
   assert.match(t("policyMonitoringDisclosure"), /within six hours/);
@@ -215,6 +235,7 @@ test("respects manual locale override", async () => {
   assert.match(t("companionOverlayDisclosure"), /웹사이트 DOM/);
   assert.match(t("statusCompanionOverlayEnabled"), /모든 지원 웹페이지/);
   assert.match(t("statusCompanionOverlayUpdateFailed"), /팝업을 다시 열어/);
+  assert.match(t("statusObservationSettingsOpenFailed"), /설정 화면을 열지 못했습니다/);
   assert.match(t("policyMonitoringDisclosure"), /지금 정책 호스트에 다시 접속/);
   assert.match(t("policyMonitoringDisclosure"), /최대 6시간에 한 번/);
   assert.match(t("policyMonitoringDisclosure"), /6시간 안에도 다시 접속/);

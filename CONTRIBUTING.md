@@ -8,16 +8,17 @@ Thanks for considering a contribution to unveily.
 2. Run `npm ci`.
 3. Run `npm test`.
 4. Run `npm run check`.
-5. Run `npm run test:e2e:chrome` with Chrome 140 or newer.
-6. Load the project folder from `chrome://extensions` with Developer mode enabled for the remaining manual checks.
+5. Run `npm run package:extension && npm run test:package`.
+6. Run `npm run test:e2e:chrome` with Chrome 140 or newer.
+7. Load the project folder from `chrome://extensions` with Developer mode enabled for the remaining manual checks.
 
-`npm run check` syntax-checks every `src/*.js` extension module and every `scripts/*.mjs` repository maintenance or CI script.
+`npm run check` syntax-checks every `src/*.js` extension module and every `scripts/*.mjs` repository maintenance or CI script. Packaging uses an explicit runtime-file allowlist, fixed ZIP metadata, and checksum/content verification; `dist/` remains ignored and packaged artifacts must not be committed.
 
 The registrable-domain resolver uses an offline generated copy of the official Public Suffix List. Run `npm run update:psl` only as an intentional data update, then review the version/commit recorded in `src/publicSuffixRules.js`, the generated diff, private-suffix behavior tests, and `THIRD_PARTY_NOTICES.md`.
 
 The fast `npm test` suite runs in Node with Chrome API mocks. The separate `npm run test:e2e:chrome` command launches real Chrome 140+ with a clean temporary profile and controlled localhost fixtures for the opt-in companion-overlay baseline. Before a release, also complete and record [MANUAL_TESTING.md](MANUAL_TESTING.md), including permissions, passive-observation controls, navigation isolation, hostile-page overlay tampering, partitioned cookies, Manifest V3 restart/expiry behavior, saved-policy fetch alarms, browser-frame inspection, and export redaction that the focused E2E does not automate.
 
-CI keeps the 80% line, 70% branch, and 80% function gate across directly unit-testable source modules. The event-driven MV3 `background.js` entry point remains separate because runtime-mock suites import isolated worker instances. `npm run test:coverage:background` executes the navigation, startup, and cookie runtime suites serially, explicitly includes only `background.js`, and evaluates the combined coverage of its isolated instances. It requires at least 39% line, 38% branch, and 44% function coverage, and fails if the source row, aggregate row, or representative runtime evidence is missing.
+CI installs exactly `package-lock.json`, keeps the 80% line, 70% branch, and 80% function gate across directly unit-testable source modules, builds and verifies the allowlisted ZIP, and runs the Chrome E2E headlessly. The event-driven MV3 `background.js` entry point remains separate because runtime-mock suites import isolated worker instances. `npm run test:coverage:background` executes the navigation, startup, and cookie runtime suites serially, explicitly includes only `background.js`, and evaluates the combined coverage of its isolated instances. It requires at least 39% line, 38% branch, and 44% function coverage, and fails if the source row, aggregate row, or representative runtime evidence is missing.
 
 This project is a Chrome Manifest V3 extension with no backend by default. Keep new features local-first unless there is a clear reason to introduce a remote service.
 

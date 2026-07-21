@@ -342,3 +342,55 @@ test("bounds startup visibility delivery concurrency", async () => {
   assert.equal(maximumActive, 3);
   assert.equal(sent.length, 12);
 });
+
+test("a newer preference broadcast cancels queued deliveries from the prior visibility epoch", async () => {
+  let enabled = false;
+  let queryCalls = 0;
+  let releaseFirstDocument;
+  let markFirstDocumentStarted;
+  const firstDocumentStarted = new Promise((resolve) => {
+    markFirstDocumentStarted = resolve;
+  });
+  const sent = [];
+  const runtime = createCompanionOverlayRuntime({
+    chrome: {
+      runtime: { lastError: null },
+      tabs: {
+        async query() {
+          queryCalls += 1;
+          return queryCalls === 1 ? [{ id: 1 }, { id: 2 }] : [{ id: 2 }];
+        },
+        sendMessage(tabId, message, options, callback) {
+          sent.push({ tabId, message, options });
+          callback?.();
+        }
+      }
+    },
+    getCurrentTopDocument: async (tabId) => {
+      if (tabId === 1) {
+        markFirstDocumentStarted();
+        await new Promise((resolve) => {
+          releaseFirstDocument = resolve;
+        });
+      }
+      return { documentId: `document-${tabId}` };
+    },
+    getState: async () => ({ status: "ready", score: 25 }),
+    createUnknownState: () => ({ status: "unknown", score: null }),
+    isEnabled: () => enabled,
+    generationReady: Promise.resolve(13),
+    maxBroadcastConcurrency: 1
+  });
+
+  const staleOffBroadcast = runtime.broadcast();
+  await firstDocumentStarted;
+  enabled = true;
+  await runtime.broadcast();
+  releaseFirstDocument();
+  await staleOffBroadcast;
+
+  assert.deepEqual(
+    sent.map(({ tabId, message }) => ({ tabId, enabled: message.enabled })),
+    [{ tabId: 2, enabled: true }]
+  );
+});

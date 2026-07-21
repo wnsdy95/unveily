@@ -149,7 +149,7 @@ function executeOverlay({
   const listeners = [];
   const windowListeners = new Map();
   const requests = [];
-  let initialCallback = null;
+  const deferredCallbacks = [];
   let runtimeResponse = initialResponse;
   const runtime = {
     id: "test-extension",
@@ -161,7 +161,7 @@ function executeOverlay({
     },
     sendMessage(message, callback) {
       requests.push(message);
-      if (deferInitial) initialCallback = callback;
+      if (deferInitial) deferredCallbacks.push(callback);
       else callback(withGeneration(runtimeResponse));
     }
   };
@@ -215,9 +215,15 @@ function executeOverlay({
       return response;
     },
     resolveInitial(response = initialResponse) {
-      assert.equal(typeof initialCallback, "function");
-      const callback = initialCallback;
-      initialCallback = null;
+      const callback = deferredCallbacks[0];
+      assert.equal(typeof callback, "function");
+      deferredCallbacks[0] = null;
+      callback(withGeneration(response));
+    },
+    resolveDeferredRequest(index, response = initialResponse) {
+      const callback = deferredCallbacks[index];
+      assert.equal(typeof callback, "function");
+      deferredCallbacks[index] = null;
       callback(withGeneration(response));
     },
     setRuntimeResponse(response) {
@@ -444,6 +450,37 @@ test("unmounts on disable, ignores state while disabled, and identifies only own
   assert.equal(harness.document.documentElement.children.length, 1);
   assert.equal(api.snapshot().score, 50);
   assert.notEqual(overlayHost(harness), firstHost);
+});
+
+test("resynchronizes visibility when a state push overtakes the initial response", () => {
+  const harness = executeOverlay({ deferInitial: true });
+  assert.equal(harness.requests.length, 1);
+
+  harness.dispatch({
+    type: "COMPANION_OVERLAY_STATE",
+    revision: 2,
+    state: readyState(25)
+  });
+  assert.equal(overlayHost(harness), null, "a state-only push cannot enable the companion");
+  assert.equal(harness.requests.length, 2, "the state race must trigger an authoritative retry");
+
+  harness.resolveDeferredRequest(1, {
+    ok: true,
+    enabled: true,
+    revision: 2,
+    state: readyState(25)
+  });
+  assert.ok(overlayHost(harness), "an equal-revision authoritative response enables the companion");
+  assert.equal(harness.sandbox.__unveilyCompanionOverlay.snapshot().score, 25);
+
+  harness.resolveDeferredRequest(0, {
+    ok: true,
+    enabled: false,
+    revision: 1,
+    state: readyState(100)
+  });
+  assert.ok(overlayHost(harness), "the late initial callback cannot undo the retry response");
+  assert.equal(harness.sandbox.__unveilyCompanionOverlay.snapshot().score, 25);
 });
 
 test("rejects untrusted senders and malformed revisions", () => {

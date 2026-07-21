@@ -19,6 +19,7 @@ Use controlled test pages and synthetic sentinel values. Do not enter real passw
 - [ ] `npm run test:coverage` passes.
 - [ ] `npm run test:coverage:background` passes.
 - [ ] `npm run check` passes.
+- [ ] `npm run package:extension && npm run test:package` creates and verifies the allowlisted reproducible ZIP.
 - [ ] `npm run test:e2e:chrome` passes in Chrome 140 or newer.
 - [ ] `git diff --check` reports no whitespace errors.
 
@@ -31,6 +32,7 @@ Keep the manual items below: the automated baseline does not inspect permission-
 ## Installation, permissions, and first-run disclosure
 
 - [ ] Load the repository as an unpacked extension from `chrome://extensions`.
+- [ ] Extract the generated `dist/unveily-<version>.zip` into a clean temporary directory, load that directory as an unpacked extension, and confirm its version and first-run behavior match the source-tree installation.
 - [ ] Confirm the extension requires Chrome 140 or newer and incognito access is not allowed.
 - [ ] Review the permission warning and confirm all-site HTTP/HTTPS host access plus `webRequest`, `webNavigation`, `cookies`, `storage`, `alarms`, and `notifications` match the documented purposes; confirm no `sidePanel` permission remains.
 - [ ] On a clean first install, confirm the options page opens once and clearly says that value-free request/cookie metadata observation is enabled by default on all allowed HTTP/HTTPS sites; bounded visible text outside user-input/editing areas is assessed locally for policy likelihood; only a bounded policy-like excerpt reaches the service worker; the text is not stored in observation history or sent remotely; and pause/exclusion controls apply to this automatic scan.

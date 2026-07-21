@@ -130,3 +130,14 @@ test("keeps the Chrome 140 storage-isolation baseline consistent across release 
     assert.match(document, /Chrome 140/);
   }
 });
+
+test("documents reproducible allowlisted release packaging without treating it as a store release", () => {
+  for (const document of [readme, contributing, manualTesting]) {
+    assert.match(document, /npm run package:extension/);
+    assert.match(document, /npm run test:package/);
+    assert.match(document, /allowlist/i);
+  }
+  assert.match(readme, /fixed ZIP metadata/);
+  assert.match(readme, /not yet a reviewed or published store release/);
+  assert.match(manualTesting, /Extract the generated `dist\/unveily-<version>\.zip`/);
+});

@@ -24,6 +24,9 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Install locked dependencies
+        run: npm ci
+
       - name: Run tests with coverage
         run: npm run test:coverage
 
@@ -32,3 +35,11 @@ jobs:
 
       - name: Run syntax checks
         run: npm run check
+
+      - name: Build and verify extension package
+        run: npm run package:extension && npm run test:package
+
+      - name: Run real Chrome E2E
+        run: npm run test:e2e:chrome
+        env:
+          E2E_HEADLESS: "1"

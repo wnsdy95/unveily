@@ -8,6 +8,8 @@
   "scripts": {
     "test": "node --test",
     "test:e2e:chrome": "node scripts/e2e-companion.mjs",
+    "package:extension": "node scripts/package-extension.mjs",
+    "test:package": "node scripts/package-extension.mjs --verify",
     "test:coverage": "node --test --experimental-test-coverage --test-coverage-exclude='test/**' --test-coverage-exclude='src/background.js' --test-coverage-lines=80 --test-coverage-branches=70 --test-coverage-functions=80",
     "test:coverage:background": "node scripts/check-background-coverage.mjs",
     "check": "for file in src/*.js scripts/*.mjs; do [ -f \"$file\" ] || continue; node --check \"$file\" || exit 1; done",

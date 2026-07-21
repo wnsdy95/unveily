@@ -41,3 +41,14 @@ test("syntax-checks extension sources and repository scripts with a portable she
   assert.match(packageJson.scripts.check, /node --check \"\$file\" \|\| exit 1/);
   assert.match(workflow, /run:\s*npm run check/);
 });
+
+test("installs locked dependencies and gates the packaged extension in real Chrome", () => {
+  assert.equal(packageJson.scripts["package:extension"], "node scripts/package-extension.mjs");
+  assert.equal(packageJson.scripts["test:package"], "node scripts/package-extension.mjs --verify");
+  assert.match(workflow, /name:\s*Install locked dependencies\s*\n\s*run:\s*npm ci/);
+  assert.match(
+    workflow,
+    /name:\s*Build and verify extension package\s*\n\s*run:\s*npm run package:extension && npm run test:package/
+  );
+  assert.match(workflow, /name:\s*Run real Chrome E2E[\s\S]*?E2E_HEADLESS:\s*"1"/);
+});

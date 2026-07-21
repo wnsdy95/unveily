@@ -330,6 +330,13 @@ async function setCompanionOverlayEnabledFromStorage(extensionPage, worker, enab
   );
 }
 
+async function companionPreferenceState(popup) {
+  return popup.evaluate(async (storageKey) => ({
+    stored: (await chrome.storage.local.get(storageKey))?.[storageKey],
+    runtime: await chrome.runtime.sendMessage({ type: "GET_COMPANION_OVERLAY_PREFERENCE" })
+  }), COMPANION_OVERLAY_ENABLED_KEY);
+}
+
 async function contentObservationActive(worker, tabId) {
   return worker.evaluate(async (targetTabId) => {
     try {
@@ -940,12 +947,20 @@ async function run() {
       timeout: DEFAULT_TIMEOUT_MS
     });
     const ordinaryPage = await ordinaryTarget.asPage();
-    const ordinaryInitial = await waitForOverlay(
-      worker,
-      ordinaryTab.id,
-      (state) => state.ownedHostCount === 1 && state.snapshot?.score === null,
-      "unknown overlay in a second tab"
-    );
+    let ordinaryInitial;
+    try {
+      ordinaryInitial = await waitForOverlay(
+        worker,
+        ordinaryTab.id,
+        (state) => state.ownedHostCount === 1 && state.snapshot?.score === null,
+        "unknown overlay in a second tab"
+      );
+    } catch (error) {
+      const diagnosticPopup = await openPopup({ browser, extension, extensionId, page: ordinaryPage });
+      const preference = await companionPreferenceState(diagnosticPopup);
+      await closeTransientPage(diagnosticPopup, "tab-isolation diagnostic popup close");
+      throw new Error(`${error.message} Companion preference: ${JSON.stringify(preference)}`);
+    }
     assertMountedOverlayLayout(ordinaryInitial);
     const ordinaryInitialStamp = overlayStamp(ordinaryInitial.snapshot);
     const ordinaryPopup = await openPopup({ browser, extension, extensionId, page: ordinaryPage });
@@ -964,6 +979,10 @@ async function run() {
     assert.equal((await overlayState(worker, ordinaryTab.id)).snapshot?.score, 25);
     step("verified risk updates remain isolated between two live tabs");
 
+    assert.deepEqual(await companionPreferenceState(ordinaryPopup), {
+      stored: true,
+      runtime: { ok: true, enabled: true }
+    });
     await closeTransientPage(ordinaryPopup, "tab-isolation popup close");
 
     const staleSourceUrl = `${fixture.baseUrl}/ordinary-stale-source`;
@@ -977,12 +996,20 @@ async function run() {
       timeout: DEFAULT_TIMEOUT_MS
     });
     const stalePage = await staleTarget.asPage();
-    const staleInitial = await waitForOverlay(
-      worker,
-      staleTab.id,
-      (state) => state.ownedHostCount === 1 && state.snapshot?.score === null,
-      "stale-source initial overlay"
-    );
+    let staleInitial;
+    try {
+      staleInitial = await waitForOverlay(
+        worker,
+        staleTab.id,
+        (state) => state.ownedHostCount === 1 && state.snapshot?.score === null,
+        "stale-source initial overlay"
+      );
+    } catch (error) {
+      const diagnosticPopup = await openPopup({ browser, extension, extensionId, page: stalePage });
+      const preference = await companionPreferenceState(diagnosticPopup);
+      await closeTransientPage(diagnosticPopup, "stale-source diagnostic popup close");
+      throw new Error(`${error.message} Companion preference: ${JSON.stringify(preference)}`);
+    }
     const staleInitialStamp = overlayStamp(staleInitial.snapshot);
     const staleSourcePopup = await openPopup({ browser, extension, extensionId, page: stalePage });
     await triggerPopupPageAnalysis(staleSourcePopup);
