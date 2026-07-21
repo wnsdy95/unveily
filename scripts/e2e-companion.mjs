@@ -15,6 +15,7 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const HIDDEN_SCAN_WAIT_MS = 16_000;
 const COMPANION_OVERLAY_GENERATION_KEY = "companionOverlayWorkerGenerationV1";
 const COMPANION_OVERLAY_ENABLED_KEY = "companionOverlayEnabled";
+const ANALYSIS_MODE_PREFERENCE_KEY = "analysisModePreferenceV1";
 const EXPECTED_COLORS = new Map([
   [0, { hex: "#039855", rgba: [3, 152, 85, 255] }],
   [25, { hex: "#70802C", rgba: [112, 128, 44, 255] }],
@@ -419,6 +420,9 @@ async function popupAnalysisState(popup) {
     const result = document.querySelector("#result");
     const meter = result?.querySelector(".score-card meter") || null;
     const score = meter && Number.isFinite(Number(meter.value)) ? Number(meter.value) : null;
+    const activeModes = Array.from(document.querySelectorAll(".mode-button"))
+      .filter((button) => button.getAttribute("aria-pressed") === "true")
+      .map((button) => button.dataset.mode || "");
     return {
       status: document.querySelector("#status")?.textContent?.trim() || "",
       source: document.querySelector("#sourceLabel")?.textContent?.trim() || "",
@@ -426,7 +430,8 @@ async function popupAnalysisState(popup) {
       resultChildCount: result?.childElementCount || 0,
       score,
       meterMin: meter?.getAttribute("min") || "",
-      meterMax: meter?.getAttribute("max") || ""
+      meterMax: meter?.getAttribute("max") || "",
+      activeModes
     };
   });
 }
@@ -434,13 +439,55 @@ async function popupAnalysisState(popup) {
 async function waitForCompletedPopupAnalysis(popup) {
   return waitFor(async () => {
     const state = await popupAnalysisState(popup);
-    return /분석 완료|Analysis complete/i.test(state.status) &&
+    return state.activeModes.length === 1 &&
+      state.activeModes[0] === "page" &&
+      /분석 완료|Analysis complete/i.test(state.status) &&
       state.resultChildCount > 0 &&
       state.resultText.length > 100 &&
       state.score !== null
       ? state
       : null;
   }, { label: "completed current-page analysis in the real popup" });
+}
+
+async function waitForCompletedCookieAnalysis(popup) {
+  return waitFor(async () => {
+    const state = await popupAnalysisState(popup);
+    return state.activeModes.length === 1 &&
+      state.activeModes[0] === "cookies" &&
+      /쿠키 분석 완료|Cookie analysis complete/i.test(state.status) &&
+      /쿠키 위험도|Cookie risk/i.test(state.resultText) &&
+      state.resultChildCount > 0 &&
+      state.score !== null
+      ? state
+      : null;
+  }, { label: "completed cookie analysis restored in the real popup" });
+}
+
+async function dispatchPopupAnalysisModes(popup, modes) {
+  return popup.evaluate((requestedModes) => {
+    for (const mode of requestedModes) {
+      const button = document.querySelector(`.mode-button[data-mode="${mode}"]`);
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error(`Analysis mode button is unavailable: ${mode}`);
+      }
+      button.click();
+    }
+    return Array.from(document.querySelectorAll(".mode-button"))
+      .filter((button) => button.getAttribute("aria-pressed") === "true")
+      .map((button) => button.dataset.mode || "");
+  }, modes);
+}
+
+async function waitForStoredAnalysisMode(worker, mode) {
+  return waitFor(
+    () =>
+      worker.evaluate(async ({ storageKey, expectedMode }) => {
+        const stored = await chrome.storage.local.get(storageKey);
+        return stored?.[storageKey] === expectedMode ? expectedMode : false;
+      }, { storageKey: ANALYSIS_MODE_PREFERENCE_KEY, expectedMode: mode }),
+    { label: `persisted analysis mode ${mode}` }
+  );
 }
 
 async function triggerPopupPageAnalysis(popup) {
@@ -847,7 +894,41 @@ async function run() {
     assertMountedOverlayLayout(restoredOverlay);
     step("verified OFF removes the host and ON restores the latest tab score");
 
-    await closeTransientPage(popup, "analyzed popup close before BFCache navigation");
+    assert.deepEqual(await dispatchPopupAnalysisModes(popup, ["cookies"]), ["cookies"]);
+    await closeTransientPage(popup, "cookie selection immediate popup close");
+    const modeDestinationUrl = `${fixture.baseUrl}/ordinary-mode-persistence`;
+    await activateTab(worker, hiddenTab.id);
+    await hiddenPage.bringToFront();
+    await hiddenPage.goto(modeDestinationUrl, { waitUntil: "domcontentloaded" });
+    const restoredCookiePopup = await openPopup({
+      browser,
+      extension,
+      extensionId,
+      page: hiddenPage
+    });
+    const restoredCookieAnalysis = await waitForCompletedCookieAnalysis(restoredCookiePopup);
+    assert.equal(restoredCookieAnalysis.source, "E2E Ordinary Page");
+    assert.deepEqual(
+      await restoredCookiePopup.evaluate(async () =>
+        chrome.runtime.sendMessage({ type: "GET_ANALYSIS_MODE_PREFERENCE" })
+      ),
+      { ok: true, mode: "cookies" }
+    );
+    const restoredCookieOverlay = await waitForOverlay(
+      worker,
+      hiddenTab.id,
+      (state) =>
+        state.ownedHostCount === 1 &&
+        state.snapshot?.source === "cookie-analysis" &&
+        state.snapshot?.score === restoredCookieAnalysis.score,
+      "cookie-source overlay after navigation and popup reopen"
+    );
+    assertMountedOverlayLayout(restoredCookieOverlay);
+    await closeTransientPage(restoredCookiePopup, "restored cookie popup close");
+    step("restored cookie analysis and its allowlisted cookie-analysis source after a popup close, tab switch, and navigation");
+
+    await activateTab(worker, policyTab.id);
+    await policyPage.bringToFront();
     await installContentMessageTrace(worker, policyTab.id);
     await waitForContentObservation(worker, policyTab.id, true);
     step("armed content lifecycle tracing before BFCache navigation");
@@ -1071,6 +1152,18 @@ async function run() {
       score: 50,
       source: "popup-page"
     });
+    assert.deepEqual(
+      await dispatchPopupAnalysisModes(staleDestinationPopup, ["cookies", "page"]),
+      ["page"]
+    );
+    await closeTransientPage(staleDestinationPopup, "rapid cookie-to-page selection immediate popup close");
+    assert.equal(await waitForStoredAnalysisMode(worker, "page"), "page");
+    step("committed the last rapid cookies-to-page intent after the selecting popup closed");
+
+    const restartModeUrl = `${fixture.baseUrl}/idle-policy?mode-restart=1`;
+    await hiddenPage.goto(restartModeUrl, { waitUntil: "domcontentloaded" });
+    await activateTab(worker, hiddenTab.id);
+    await hiddenPage.bringToFront();
     const beforeRestart = await overlayState(worker, policyTab.id);
     const beforeRestartStrict = await overlayState(worker, strictCspTab.id);
     const beforeRestartStamp = overlayStamp(beforeRestart.snapshot);
@@ -1078,15 +1171,22 @@ async function run() {
     const previousWorkerTarget = workerTarget;
     await worker.close();
     const restartedWorkerPromise = extensionWorker(browser, extensionId, previousWorkerTarget);
-    const wakeResponsePromise = staleDestinationPopup.evaluate(async () =>
-      chrome.runtime.sendMessage({ type: "GET_COMPANION_OVERLAY_PREFERENCE" })
-    );
+    const restoredPagePopupPromise = openPopup({
+      browser,
+      extension,
+      extensionId,
+      page: hiddenPage
+    });
     const restarted = await restartedWorkerPromise;
     workerTarget = restarted.target;
     worker = restarted.worker;
-    const wakeResponse = await wakeResponsePromise;
-    assert.equal(wakeResponse?.ok, true, JSON.stringify(wakeResponse));
-    assert.equal(wakeResponse?.enabled, true);
+    const restoredPagePopup = await restoredPagePopupPromise;
+    const wakeResponse = await restoredPagePopup.evaluate(async () => ({
+      analysisMode: await chrome.runtime.sendMessage({ type: "GET_ANALYSIS_MODE_PREFERENCE" }),
+      companion: await chrome.runtime.sendMessage({ type: "GET_COMPANION_OVERLAY_PREFERENCE" })
+    }));
+    assert.deepEqual(wakeResponse?.analysisMode, { ok: true, mode: "page" });
+    assert.deepEqual(wakeResponse?.companion, { ok: true, enabled: true });
     const startupPolicyState = await waitForOverlay(
       worker,
       policyTab.id,
@@ -1111,7 +1211,23 @@ async function run() {
     assert.ok(compareOverlayStamps(startupStrictStamp, beforeRestartStrictStamp) > 0);
     assert.equal(startupPolicyState.snapshot.score, 100);
     assert.equal(startupStrictState.snapshot.score, 50);
-    const postRestartResponse = await publishSyntheticRisk(staleDestinationPopup, policyUrl, 0);
+
+    const restoredPageAnalysis = await waitForCompletedPopupAnalysis(restoredPagePopup);
+    assert.deepEqual(restoredPageAnalysis.activeModes, ["page"]);
+    assert.equal(restoredPageAnalysis.source, "E2E Privacy Policy");
+    const restoredPageOverlay = await waitForOverlay(
+      worker,
+      hiddenTab.id,
+      (state) =>
+        state.ownedHostCount === 1 &&
+        state.snapshot?.source === "page-analysis" &&
+        state.snapshot?.score === restoredPageAnalysis.score,
+      "page-source overlay after worker restart and popup reopen"
+    );
+    assertMountedOverlayLayout(restoredPageOverlay);
+    step("restored current-page analysis and its allowlisted page-analysis source after an MV3 worker restart");
+
+    const postRestartResponse = await publishSyntheticRisk(restoredPagePopup, policyUrl, 0);
     assert.equal(postRestartResponse?.ok, true, JSON.stringify(postRestartResponse));
     const afterRestart = await waitForOverlayScore(worker, policyTab.id, 0);
     const afterRestartStamp = overlayStamp(afterRestart.snapshot);
@@ -1121,6 +1237,7 @@ async function run() {
     );
     assert.equal(afterRestart.snapshot.color, EXPECTED_COLORS.get(0).hex);
     step("verified startup broadcasts and lexicographically monotonic stamps after MV3 worker restart");
+    await closeTransientPage(restoredPagePopup, "restored page-mode popup close");
 
     await activateTab(worker, policyTab.id);
     await policyPage.bringToFront();

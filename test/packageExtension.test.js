@@ -55,6 +55,7 @@ test("builds a reproducible allowlisted extension ZIP", () => {
     "icons/icon.png",
     "_locales/ko/messages.json",
     "_locales/en/messages.json",
+    "src/analysisModePreference.js",
     "src/background.js",
     "src/content.js",
     "src/popup.html"

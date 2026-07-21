@@ -15,6 +15,8 @@ const ALLOWED_MESSAGE_TYPES = new Set([
   "GET_COMPANION_OVERLAY_STATE",
   "GET_COMPANION_OVERLAY_PREFERENCE",
   "SET_COMPANION_OVERLAY_PREFERENCE",
+  "GET_ANALYSIS_MODE_PREFERENCE",
+  "SET_ANALYSIS_MODE_PREFERENCE",
   "PAGE_RISK_SCAN",
   "SET_RISK_INDICATOR",
   "CHECK_SAVED_POLICIES_NOW"
@@ -27,6 +29,8 @@ const POPUP_MESSAGE_TYPES = new Set([
   "SAVE_MONITORED_POLICY_SNAPSHOT",
   "GET_COMPANION_OVERLAY_PREFERENCE",
   "SET_COMPANION_OVERLAY_PREFERENCE",
+  "GET_ANALYSIS_MODE_PREFERENCE",
+  "SET_ANALYSIS_MODE_PREFERENCE",
   "SET_RISK_INDICATOR",
   "CHECK_SAVED_POLICIES_NOW"
 ]);
@@ -873,6 +877,21 @@ function hasExactKeys(value, keys) {
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
+function isTrustedExtensionPageSender(sender, runtimeId) {
+  if (typeof sender?.url !== "string" || sender.url.length > 2_048) return false;
+  try {
+    const senderUrl = new URL(sender.url);
+    return (
+      senderUrl.protocol === "chrome-extension:" &&
+      senderUrl.hostname === runtimeId &&
+      !senderUrl.username &&
+      !senderUrl.password
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function validateRuntimeMessage(message, sender, runtimeId) {
   if (!isPlainObject(message) || !ALLOWED_MESSAGE_TYPES.has(message.type)) {
     return { ok: false, error: "Unsupported message type" };
@@ -929,7 +948,9 @@ export function validateRuntimeMessage(message, sender, runtimeId) {
     const tablessMessage = [
       "CHECK_SAVED_POLICIES_NOW",
       "GET_COMPANION_OVERLAY_PREFERENCE",
-      "SET_COMPANION_OVERLAY_PREFERENCE"
+      "SET_COMPANION_OVERLAY_PREFERENCE",
+      "GET_ANALYSIS_MODE_PREFERENCE",
+      "SET_ANALYSIS_MODE_PREFERENCE"
     ].includes(message.type);
     if (!tablessMessage && (!Number.isInteger(message.tabId) || message.tabId < 0)) {
       return { ok: false, error: "Invalid tab id" };
@@ -945,6 +966,24 @@ export function validateRuntimeMessage(message, sender, runtimeId) {
       (!hasExactKeys(message, ["type", "enabled"]) || typeof message.enabled !== "boolean")
     ) {
       return { ok: false, error: "Invalid companion overlay preference request" };
+    }
+    if (
+      ["GET_ANALYSIS_MODE_PREFERENCE", "SET_ANALYSIS_MODE_PREFERENCE"].includes(message.type) &&
+      !isTrustedExtensionPageSender(sender, runtimeId)
+    ) {
+      return { ok: false, error: "Analysis mode requires a trusted extension-page sender" };
+    }
+    if (
+      message.type === "GET_ANALYSIS_MODE_PREFERENCE" &&
+      !hasExactKeys(message, ["type"])
+    ) {
+      return { ok: false, error: "Invalid analysis mode preference request" };
+    }
+    if (
+      message.type === "SET_ANALYSIS_MODE_PREFERENCE" &&
+      (!hasExactKeys(message, ["type", "mode"]) || !["page", "cookies"].includes(message.mode))
+    ) {
+      return { ok: false, error: "Invalid analysis mode preference request" };
     }
     if (["CLEAR_NETWORK_ACTIVITY", "SAVE_OBSERVATION_SNAPSHOT"].includes(message.type)) {
       const validDocumentId =

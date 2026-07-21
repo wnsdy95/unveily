@@ -904,6 +904,18 @@ test("companion overlay messages derive document authority from the top-level co
     ).ok,
     true
   );
+  assert.equal(
+    validateRuntimeMessage({ type: "GET_ANALYSIS_MODE_PREFERENCE" }, popupSender, runtimeId).ok,
+    true
+  );
+  assert.equal(
+    validateRuntimeMessage(
+      { type: "SET_ANALYSIS_MODE_PREFERENCE", mode: "cookies" },
+      popupSender,
+      runtimeId
+    ).ok,
+    true
+  );
   for (const message of [
     { type: "GET_COMPANION_OVERLAY_PREFERENCE", extra: true },
     { type: "SET_COMPANION_OVERLAY_PREFERENCE" },
@@ -911,6 +923,26 @@ test("companion overlay messages derive document authority from the top-level co
     { type: "SET_COMPANION_OVERLAY_PREFERENCE", enabled: true, tabId: 9 }
   ]) {
     assert.equal(validateRuntimeMessage(message, popupSender, runtimeId).ok, false);
+  }
+  for (const message of [
+    { type: "GET_ANALYSIS_MODE_PREFERENCE", extra: true },
+    { type: "SET_ANALYSIS_MODE_PREFERENCE" },
+    { type: "SET_ANALYSIS_MODE_PREFERENCE", mode: "paste" },
+    { type: "SET_ANALYSIS_MODE_PREFERENCE", mode: "COOKIES" },
+    { type: "SET_ANALYSIS_MODE_PREFERENCE", mode: "page", extra: true }
+  ]) {
+    assert.equal(validateRuntimeMessage(message, popupSender, runtimeId).ok, false);
+  }
+  for (const sender of [
+    { id: runtimeId },
+    { id: runtimeId, url: "https://example.com/popup.html" },
+    { id: runtimeId, url: "chrome-extension://other-extension/src/popup.html" },
+    validSender
+  ]) {
+    assert.equal(
+      validateRuntimeMessage({ type: "GET_ANALYSIS_MODE_PREFERENCE" }, sender, runtimeId).ok,
+      false
+    );
   }
 });
 

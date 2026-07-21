@@ -30,6 +30,10 @@ import {
 } from "./i18n.js";
 import { documentUrlFingerprint, sanitizeNetworkUrl } from "./backgroundSecurity.js";
 import { ensureTrustedLocalStorage } from "./trustedLocalStorage.js";
+import {
+  DEFAULT_ANALYSIS_MODE,
+  normalizeAnalysisModePreference
+} from "./analysisModePreference.js";
 
 let latestSource = null;
 let latestReportPayload = null;
@@ -117,6 +121,38 @@ function beginAnalysis(mode) {
   setActiveAnalysisMode(mode);
   clearLatestAnalysisState();
   return analysisGeneration;
+}
+
+function rememberAnalysisMode(mode) {
+  if (!trustedLocalStorageAvailable || normalizeAnalysisModePreference(mode) !== mode) return;
+  let request;
+  try {
+    request = chrome.runtime.sendMessage({
+      type: "SET_ANALYSIS_MODE_PREFERENCE",
+      mode
+    });
+  } catch {
+    if (latestAnalysisMode === mode) setStatus(t("statusStorageFailed"), true);
+    return;
+  }
+  void Promise.resolve(request)
+    .then((response) => {
+      if (response?.ok === true && response.mode === mode) return;
+      if (latestAnalysisMode === mode) setStatus(t("statusStorageFailed"), true);
+    })
+    .catch(() => {
+      if (latestAnalysisMode === mode) setStatus(t("statusStorageFailed"), true);
+    });
+}
+
+function selectCurrentPageAnalysis() {
+  rememberAnalysisMode("page");
+  return analyzeCurrentPage();
+}
+
+function selectCookieAnalysis() {
+  rememberAnalysisMode("cookies");
+  return analyzeCookies();
 }
 
 function isCurrentAnalysis(generation) {
@@ -2230,8 +2266,8 @@ async function handleLanguageChange(event) {
 }
 
 function bindPopupEvents() {
-  analyzePageButton.addEventListener("click", analyzeCurrentPage);
-  analyzeCookiesButton.addEventListener("click", analyzeCookies);
+  analyzePageButton.addEventListener("click", selectCurrentPageAnalysis);
+  analyzeCookiesButton.addEventListener("click", selectCookieAnalysis);
   analyzePasteButton.addEventListener("click", () => {
     pastePanel.hidden = false;
     policyText.focus();
@@ -2254,17 +2290,40 @@ function bindTrustedLocalStorageEvents() {
   languageSelect?.addEventListener("change", handleLanguageChange);
 }
 
-function initializePopupUi() {
+function initializePopupUi(mode = DEFAULT_ANALYSIS_MODE) {
+  if (normalizeAnalysisModePreference(mode) === "cookies") {
+    analyzeCookies();
+    return;
+  }
   analyzeCurrentPage();
 }
 
+async function loadInitialAnalysisMode() {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "GET_ANALYSIS_MODE_PREFERENCE"
+    });
+    if (
+      response?.ok === true &&
+      normalizeAnalysisModePreference(response.mode) === response.mode
+    ) {
+      return response.mode;
+    }
+  } catch {
+    // The default analysis remains available without persisted local state.
+  }
+  return DEFAULT_ANALYSIS_MODE;
+}
+
 async function startPopup() {
+  let initialAnalysisMode = DEFAULT_ANALYSIS_MODE;
   setLocalStorageControlsEnabled(false);
   trustedLocalStorageAvailable = await ensureTrustedLocalStorage();
   if (trustedLocalStorageAvailable) {
     await applyI18n();
     const savedLocale = await getLocalePreference();
     if (languageSelect) languageSelect.value = savedLocale;
+    initialAnalysisMode = await loadInitialAnalysisMode();
     void loadCompanionOverlayPreference();
     bindTrustedLocalStorageEvents();
   } else {
@@ -2275,7 +2334,7 @@ async function startPopup() {
   setLocalStorageControlsEnabled(trustedLocalStorageAvailable);
   renderCompanionOverlayPreference();
   setActionMenuExpanded(!actionsPanel.hidden);
-  initializePopupUi();
+  initializePopupUi(initialAnalysisMode);
 }
 
 startPopup();

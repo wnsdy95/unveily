@@ -56,6 +56,13 @@ import {
 import { createCookieChangeQueue, createTabRequestTokenBucket } from "./runtimeLimits.js";
 import { riskColorForScore } from "./riskColor.js";
 import { ensureTrustedLocalStorage } from "./trustedLocalStorage.js";
+import {
+  ANALYSIS_MODE_PREFERENCE_KEY,
+  DEFAULT_ANALYSIS_MODE,
+  loadAnalysisModePreference,
+  normalizeAnalysisModePreference,
+  saveAnalysisModePreference
+} from "./analysisModePreference.js";
 
 const MAX_REQUESTS_PER_TAB = 300;
 const MAX_COOKIES_PER_TAB = 120;
@@ -139,6 +146,8 @@ let observationMatcher = createObservationMatcher(observationSettings);
 let observationRuntimeState = "initializing";
 let localStorageTrustedContextsOnly = false;
 let companionOverlayEnabled = false;
+let analysisModePreference = DEFAULT_ANALYSIS_MODE;
+let analysisModePreferenceWrite = Promise.resolve();
 const companionOverlayGenerationReady = reserveCompanionOverlayGeneration(
   chrome.storage.session
 ).catch(() => null);
@@ -2270,6 +2279,7 @@ async function initializeObservationRuntime() {
     // cannot be hidden from content scripts. Explicit page analysis remains available.
     applyObservationSettings({ enabled: false });
     companionOverlayEnabled = false;
+    analysisModePreference = DEFAULT_ANALYSIS_MODE;
     observationRuntimeState = "paused";
     pendingInitializationRequests.length = 0;
     initializationNavigationTabs.clear();
@@ -2292,6 +2302,13 @@ async function initializeObservationRuntime() {
       loadCompanionOverlayEnabled(chrome.storage.local).then((enabled) => {
         companionOverlayEnabled = enabled;
       }),
+      loadAnalysisModePreference()
+        .then((mode) => {
+          analysisModePreference = normalizeAnalysisModePreference(mode);
+        })
+        .catch(() => {
+          analysisModePreference = DEFAULT_ANALYSIS_MODE;
+        }),
       getLocalePreference()
     ]);
     await hydrateObservationState();
@@ -2381,6 +2398,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       companionOverlayEnabled = nextEnabled;
       void companionOverlayRuntime.broadcast();
     }
+  }
+  if (changes[ANALYSIS_MODE_PREFERENCE_KEY]) {
+    analysisModePreference = normalizeAnalysisModePreference(
+      changes[ANALYSIS_MODE_PREFERENCE_KEY].newValue
+    );
   }
   if (changes.uiLocaleOverride) {
     void setLocalePreference(changes.uiLocaleOverride.newValue);
@@ -2718,6 +2740,31 @@ function ensureContentSenderSession(sender) {
   return touchSession(tabId) ? current : null;
 }
 
+function analysisModeStorageUnavailableResponse() {
+  return {
+    ok: false,
+    mode: DEFAULT_ANALYSIS_MODE,
+    code: "STORAGE_ISOLATION_UNAVAILABLE",
+    error: "Trusted local storage access is unavailable"
+  };
+}
+
+function queueAnalysisModePreferenceWrite(mode) {
+  const normalizedMode = normalizeAnalysisModePreference(mode);
+  const operation = analysisModePreferenceWrite.then(async () => {
+    const savedMode = await saveAnalysisModePreference(normalizedMode);
+    analysisModePreference = normalizeAnalysisModePreference(savedMode);
+    return analysisModePreference;
+  });
+  analysisModePreferenceWrite = operation.catch(() => undefined);
+  return operation;
+}
+
+async function currentAnalysisModePreference() {
+  await analysisModePreferenceWrite;
+  return normalizeAnalysisModePreference(analysisModePreference);
+}
+
 async function handleRuntimeMessage(message, sender, validation) {
   await observationStateReady;
 
@@ -2763,6 +2810,29 @@ async function handleRuntimeMessage(message, sender, validation) {
     companionOverlayEnabled = nextEnabled;
     if (changed) await companionOverlayRuntime.broadcast();
     return { ok: true, enabled: companionOverlayEnabled };
+  }
+
+  if (message?.type === "GET_ANALYSIS_MODE_PREFERENCE") {
+    if (!localStorageTrustedContextsOnly) return analysisModeStorageUnavailableResponse();
+    return {
+      ok: true,
+      mode: await currentAnalysisModePreference()
+    };
+  }
+
+  if (message?.type === "SET_ANALYSIS_MODE_PREFERENCE") {
+    if (!localStorageTrustedContextsOnly) return analysisModeStorageUnavailableResponse();
+    try {
+      const mode = await queueAnalysisModePreferenceWrite(message.mode);
+      return { ok: true, mode };
+    } catch {
+      return {
+        ok: false,
+        mode: await currentAnalysisModePreference(),
+        code: "STORAGE_FAILED",
+        error: "Analysis mode preference could not be saved"
+      };
+    }
   }
 
   if (message?.type === "GET_OBSERVATION_SETTINGS") {

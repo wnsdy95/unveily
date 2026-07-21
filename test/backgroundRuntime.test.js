@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { analyzePolicy } from "../src/analyzer.js";
 import { documentUrlFingerprint } from "../src/backgroundSecurity.js";
+import { ANALYSIS_MODE_PREFERENCE_KEY } from "../src/analysisModePreference.js";
 import {
   POLICY_CHECK_HEALTH_KEY,
   POLICY_SNAPSHOTS_KEY,
@@ -52,6 +53,7 @@ function createChromeMock(options = {}) {
   const tabMessages = [];
   let tabsGetHook = null;
   let tabsGetCallCount = 0;
+  let localSetHook = null;
   let releaseInitialization = () => {};
   const initializationGate = options.blockInitialization
     ? new Promise((resolve) => {
@@ -77,6 +79,7 @@ function createChromeMock(options = {}) {
       return selectStorage(localData, keys);
     },
     async set(values) {
+      await localSetHook?.(structuredClone(values));
       Object.assign(localData, values);
       for (const waiter of Array.from(localDataWaiters)) waiter();
     }
@@ -235,6 +238,9 @@ function createChromeMock(options = {}) {
       tabsGetCallCount = 0;
       tabsGetHook = typeof hook === "function" ? hook : null;
     },
+    setLocalSetHook(hook) {
+      localSetHook = typeof hook === "function" ? hook : null;
+    },
     releaseInitialization
   };
 }
@@ -351,6 +357,108 @@ async function verifyIncrementalPolicyHealth(mock, onMessage) {
   }
 }
 
+async function verifyAnalysisModePreferenceQueue(mock, onMessage) {
+  assert.deepEqual(
+    await sendRuntimeMessage(onMessage, { type: "GET_ANALYSIS_MODE_PREFERENCE" }),
+    { ok: true, mode: "cookies" }
+  );
+
+  const writes = [];
+  let releaseFirstWrite;
+  let markFirstWriteStarted;
+  const firstWriteStarted = new Promise((resolve) => {
+    markFirstWriteStarted = resolve;
+  });
+  const firstWriteBlocked = new Promise((resolve) => {
+    releaseFirstWrite = resolve;
+  });
+  mock.setLocalSetHook(async (values) => {
+    if (!Object.hasOwn(values, ANALYSIS_MODE_PREFERENCE_KEY)) return;
+    writes.push(values[ANALYSIS_MODE_PREFERENCE_KEY]);
+    if (writes.length === 1) {
+      markFirstWriteStarted();
+      await firstWriteBlocked;
+    }
+  });
+
+  const cookiesResponse = sendRuntimeMessage(onMessage, {
+    type: "SET_ANALYSIS_MODE_PREFERENCE",
+    mode: "cookies"
+  });
+  await firstWriteStarted;
+  const pageResponse = sendRuntimeMessage(onMessage, {
+    type: "SET_ANALYSIS_MODE_PREFERENCE",
+    mode: "page"
+  });
+  const readAfterRapidClicks = sendRuntimeMessage(onMessage, {
+    type: "GET_ANALYSIS_MODE_PREFERENCE"
+  });
+
+  await flushBackgroundWork();
+  assert.deepEqual(writes, ["cookies"]);
+  assert.equal(mock.localData[ANALYSIS_MODE_PREFERENCE_KEY], "cookies");
+
+  releaseFirstWrite();
+  assert.deepEqual(await cookiesResponse, { ok: true, mode: "cookies" });
+  assert.deepEqual(await pageResponse, { ok: true, mode: "page" });
+  assert.deepEqual(await readAfterRapidClicks, { ok: true, mode: "page" });
+  assert.deepEqual(writes, ["cookies", "page"]);
+  assert.equal(mock.localData[ANALYSIS_MODE_PREFERENCE_KEY], "page");
+
+  let failNextWrite = true;
+  mock.setLocalSetHook(async (values) => {
+    if (Object.hasOwn(values, ANALYSIS_MODE_PREFERENCE_KEY) && failNextWrite) {
+      failNextWrite = false;
+      throw new Error("simulated local storage failure");
+    }
+  });
+  const failedWrite = await sendRuntimeMessage(onMessage, {
+    type: "SET_ANALYSIS_MODE_PREFERENCE",
+    mode: "cookies"
+  });
+  assert.deepEqual(failedWrite, {
+    ok: false,
+    mode: "page",
+    code: "STORAGE_FAILED",
+    error: "Analysis mode preference could not be saved"
+  });
+  assert.deepEqual(
+    await sendRuntimeMessage(onMessage, {
+      type: "SET_ANALYSIS_MODE_PREFERENCE",
+      mode: "cookies"
+    }),
+    { ok: true, mode: "cookies" }
+  );
+  assert.equal(mock.localData[ANALYSIS_MODE_PREFERENCE_KEY], "cookies");
+
+  mock.setLocalSetHook(async (values) => {
+    if (
+      Object.hasOwn(values, ANALYSIS_MODE_PREFERENCE_KEY) &&
+      values[ANALYSIS_MODE_PREFERENCE_KEY] === "page"
+    ) {
+      throw new Error("simulated reverse local storage failure");
+    }
+  });
+  assert.deepEqual(
+    await sendRuntimeMessage(onMessage, {
+      type: "SET_ANALYSIS_MODE_PREFERENCE",
+      mode: "page"
+    }),
+    {
+      ok: false,
+      mode: "cookies",
+      code: "STORAGE_FAILED",
+      error: "Analysis mode preference could not be saved"
+    }
+  );
+  assert.deepEqual(
+    await sendRuntimeMessage(onMessage, { type: "GET_ANALYSIS_MODE_PREFERENCE" }),
+    { ok: true, mode: "cookies" }
+  );
+  assert.equal(mock.localData[ANALYSIS_MODE_PREFERENCE_KEY], "cookies");
+  mock.setLocalSetHook(null);
+}
+
 test("background isolates same-route navigations and rejects stale-document request events", async () => {
   const mock = createChromeMock();
   const storedAt = Date.now();
@@ -359,6 +467,7 @@ test("background isolates same-route navigations and rejects stale-document requ
     excludedOrigins: ["https://excluded.example"]
   };
   mock.localData.companionOverlayEnabled = true;
+  mock.localData[ANALYSIS_MODE_PREFERENCE_KEY] = "cookies";
   mock.tabs.set(8, {
     id: 8,
     status: "complete",
@@ -478,6 +587,7 @@ test("background isolates same-route navigations and rejects stale-document requ
     }),
     { ok: true, enabled: true }
   );
+  await verifyAnalysisModePreferenceQueue(mock, onMessage);
   assert.equal(mock.localData.companionOverlayEnabled, true);
   assert.ok(
     mock.tabMessages.some(

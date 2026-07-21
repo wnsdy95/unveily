@@ -48,6 +48,23 @@ test("documents fail-closed local storage isolation for every extension entry po
   assert.match(manualTesting, /persistent isolation warning/);
 });
 
+test("documents the bounded persistent page-or-cookie analysis choice", () => {
+  assert.match(readme, /last selected current-page or cookie analysis mode/);
+  assert.match(readme, /Paste analysis does not replace/);
+  assert.match(privacy, /last selected web-analysis mode \(`page` or `cookies`\)/);
+  assert.match(privacy, /analysis results are not stored with this preference/);
+  assert.match(privacy, /popup does not write the analysis-mode preference directly/);
+  assert.match(privacy, /serializes writes/);
+  assert.match(privacy, /last successfully saved mode remains in effect/);
+  assert.match(security, /exact messages from this extension's own `chrome-extension:\/\/` pages/);
+  assert.match(security, /delays GET responses behind preceding writes/);
+  assert.match(security, /individual write failure retains the last successfully committed mode/);
+  assert.match(manualTesting, /Select cookie analysis, navigate and switch tabs/);
+  assert.match(manualTesting, /restart the Manifest V3 worker/);
+  assert.match(manualTesting, /Rapidly select cookie then current-page analysis/);
+  assert.match(manualTesting, /paste analysis and confirm it does not replace/i);
+});
+
 test("documents page-text editing-area exclusions and first-run disclosure", () => {
   for (const document of [readme, privacy, security]) {
     assert.match(document, /editable|editing|user-input/);

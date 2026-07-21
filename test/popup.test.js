@@ -253,7 +253,7 @@ test("has a dedicated cookie analysis menu action", () => {
   assert.match(popupSource, /const analyzeCookiesButton = document\.querySelector\("#analyzeCookiesButton"\);/);
   assert.match(popupSource, /async function analyzeCookies\(\)/);
   assert.match(popupSource, /function renderCookieFocusedAnalysis/);
-  assert.match(popupSource, /analyzeCookiesButton\.addEventListener\("click", analyzeCookies\);/);
+  assert.match(popupSource, /analyzeCookiesButton\.addEventListener\("click", selectCookieAnalysis\);/);
 });
 
 test("adds page-readability guards for unsupported schemes and content-script failures", () => {
@@ -425,4 +425,151 @@ test("highlights only the active analysis mode", () => {
   assert.match(popupSource, /beginAnalysis\("page"\);/);
   assert.match(popupSource, /beginAnalysis\("cookies"\);/);
   assert.match(popupSource, /beginAnalysis\("paste"\);/);
+});
+
+test("restores and persists the last page or cookie analysis mode", () => {
+  assert.match(
+    popupSource,
+    /import \{[\s\S]*?DEFAULT_ANALYSIS_MODE,[\s\S]*?normalizeAnalysisModePreference[\s\S]*?\} from "\.\/analysisModePreference\.js";/
+  );
+  assert.match(popupSource, /function rememberAnalysisMode\(mode\)/);
+  assert.match(
+    popupSource,
+    /if \(!trustedLocalStorageAvailable \|\| normalizeAnalysisModePreference\(mode\) !== mode\) return;/
+  );
+  assert.match(
+    popupSource,
+    /type:\s*"SET_ANALYSIS_MODE_PREFERENCE",\s*\n\s*mode/
+  );
+  assert.doesNotMatch(popupSource, /analysisModePreferenceWrite|saveAnalysisModePreference/);
+  assert.match(popupSource, /rememberAnalysisMode\("page"\);[\s\S]*?return analyzeCurrentPage\(\);/);
+  assert.match(popupSource, /rememberAnalysisMode\("cookies"\);[\s\S]*?return analyzeCookies\(\);/);
+  assert.match(popupSource, /analyzePageButton\.addEventListener\("click", selectCurrentPageAnalysis\)/);
+  assert.match(popupSource, /analyzeCookiesButton\.addEventListener\("click", selectCookieAnalysis\)/);
+  assert.doesNotMatch(
+    popupSource.match(/function analyzePastedText\(\) \{([\s\S]*?)\n\}/)?.[1] || "",
+    /rememberAnalysisMode|saveAnalysisModePreference/
+  );
+  assert.match(
+    popupSource,
+    /type:\s*"GET_ANALYSIS_MODE_PREFERENCE"[\s\S]*?initialAnalysisMode = await loadInitialAnalysisMode\(\);[\s\S]*?initializePopupUi\(initialAnalysisMode\);/
+  );
+  assert.match(
+    popupSource,
+    /function initializePopupUi\(mode = DEFAULT_ANALYSIS_MODE\) \{[\s\S]*?normalizeAnalysisModePreference\(mode\) === "cookies"[\s\S]*?analyzeCookies\(\);[\s\S]*?analyzeCurrentPage\(\);/
+  );
+});
+
+test("dispatches the last rapid mode intent before an earlier worker response settles", () => {
+  const start = popupSource.indexOf("function rememberAnalysisMode(mode) {");
+  const end = popupSource.indexOf("\nfunction isCurrentAnalysis", start);
+  assert.ok(start >= 0 && end > start, "mode selection helpers should be present");
+  const messages = [];
+  const analyses = [];
+  const pendingResponses = [];
+  const sandbox = {
+    Promise,
+    chrome: {
+      runtime: {
+        sendMessage(message) {
+          messages.push(structuredClone(message));
+          const pending = new Promise(() => {});
+          pendingResponses.push(pending);
+          return pending;
+        }
+      }
+    },
+    latestAnalysisMode: "page",
+    trustedLocalStorageAvailable: true,
+    normalizeAnalysisModePreference(mode) {
+      return mode === "cookies" ? "cookies" : "page";
+    },
+    analyzeCurrentPage() {
+      analyses.push("page");
+    },
+    analyzeCookies() {
+      analyses.push("cookies");
+    },
+    setStatus() {},
+    t: (key) => key
+  };
+  vm.runInNewContext(
+    `${popupSource.slice(start, end)}\n` +
+      "globalThis.selectCookie = selectCookieAnalysis; globalThis.selectPage = selectCurrentPageAnalysis;",
+    sandbox,
+    { filename: "popup-analysis-mode-dispatch-runtime.js" }
+  );
+
+  sandbox.selectCookie();
+  sandbox.selectPage();
+
+  assert.equal(pendingResponses.length, 2);
+  assert.deepEqual(messages, [
+    { type: "SET_ANALYSIS_MODE_PREFERENCE", mode: "cookies" },
+    { type: "SET_ANALYSIS_MODE_PREFERENCE", mode: "page" }
+  ]);
+  assert.deepEqual(analyses, ["cookies", "page"]);
+});
+
+test("restores the worker-committed mode on each fresh popup startup", async () => {
+  const start = popupSource.indexOf("function initializePopupUi(mode = DEFAULT_ANALYSIS_MODE) {");
+  assert.ok(start >= 0, "popup startup helpers should be present");
+
+  async function runStartup(response) {
+    const analyses = [];
+    const messages = [];
+    const sandbox = {
+      Promise,
+      DEFAULT_ANALYSIS_MODE: "page",
+      trustedLocalStorageAvailable: false,
+      companionOverlayPreferenceAvailable: false,
+      actionsPanel: { hidden: false },
+      languageSelect: { value: "" },
+      storageIsolationWarning: { hidden: true },
+      chrome: {
+        runtime: {
+          async sendMessage(message) {
+            messages.push(structuredClone(message));
+            return structuredClone(response);
+          }
+        }
+      },
+      normalizeAnalysisModePreference(mode) {
+        return mode === "cookies" ? "cookies" : "page";
+      },
+      analyzeCookies() {
+        analyses.push("cookies");
+      },
+      analyzeCurrentPage() {
+        analyses.push("page");
+      },
+      async ensureTrustedLocalStorage() {
+        return true;
+      },
+      async applyI18n() {},
+      async getLocalePreference() {
+        return "auto";
+      },
+      loadCompanionOverlayPreference() {},
+      bindTrustedLocalStorageEvents() {},
+      applyI18nWithoutStorage() {},
+      bindPopupEvents() {},
+      setLocalStorageControlsEnabled() {},
+      renderCompanionOverlayPreference() {},
+      setActionMenuExpanded() {}
+    };
+    await vm.runInNewContext(popupSource.slice(start), sandbox, {
+      filename: "popup-analysis-mode-startup-runtime.js"
+    });
+    return { analyses, messages };
+  }
+
+  assert.deepEqual(await runStartup({ ok: true, mode: "cookies" }), {
+    analyses: ["cookies"],
+    messages: [{ type: "GET_ANALYSIS_MODE_PREFERENCE" }]
+  });
+  assert.deepEqual(await runStartup({ ok: false, mode: "cookies" }), {
+    analyses: ["page"],
+    messages: [{ type: "GET_ANALYSIS_MODE_PREFERENCE" }]
+  });
 });

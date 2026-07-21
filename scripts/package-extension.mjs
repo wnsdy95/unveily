@@ -17,6 +17,7 @@ const EXTENSION_FILES = Object.freeze([
   "_locales/ko/messages.json",
   "icons/icon.png",
   "manifest.json",
+  "src/analysisModePreference.js",
   "src/analyzer.js",
   "src/background.js",
   "src/backgroundSecurity.js",

@@ -260,6 +260,10 @@ test("popup fails closed before local reads while keeping value-free analysis av
         return false;
       }
     },
+    DEFAULT_ANALYSIS_MODE: "page",
+    normalizeAnalysisModePreference(mode) {
+      return mode === "cookies" ? "cookies" : "page";
+    },
     async applyI18n() {
       await local.get("locale");
     },
@@ -353,7 +357,12 @@ test("popup fails closed before local reads while keeping value-free analysis av
   assert.equal(elements.get("companionOverlayToggleButton").listenerCount("click"), 0);
   assert.equal(
     state.runtimeMessages.some((message) =>
-      ["GET_COMPANION_OVERLAY_PREFERENCE", "SET_COMPANION_OVERLAY_PREFERENCE"].includes(message.type)
+      [
+        "GET_COMPANION_OVERLAY_PREFERENCE",
+        "SET_COMPANION_OVERLAY_PREFERENCE",
+        "GET_ANALYSIS_MODE_PREFERENCE",
+        "SET_ANALYSIS_MODE_PREFERENCE"
+      ].includes(message.type)
     ),
     false
   );

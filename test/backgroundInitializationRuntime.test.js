@@ -838,6 +838,20 @@ test("delayed storage isolation failure discards startup queues and policy work"
     assert.equal(companionEnable.enabled, false);
     assert.equal(companionEnable.code, "STORAGE_ISOLATION_UNAVAILABLE");
 
+    const analysisMode = await sendRuntimeMessage(mock.channels.message.listeners[0], {
+      type: "GET_ANALYSIS_MODE_PREFERENCE"
+    });
+    assert.equal(analysisMode.ok, false);
+    assert.equal(analysisMode.mode, "page");
+    assert.equal(analysisMode.code, "STORAGE_ISOLATION_UNAVAILABLE");
+    const analysisModeSave = await sendRuntimeMessage(mock.channels.message.listeners[0], {
+      type: "SET_ANALYSIS_MODE_PREFERENCE",
+      mode: "cookies"
+    });
+    assert.equal(analysisModeSave.ok, false);
+    assert.equal(analysisModeSave.mode, "page");
+    assert.equal(analysisModeSave.code, "STORAGE_ISOLATION_UNAVAILABLE");
+
     const policySave = await sendRuntimeMessage(mock.channels.message.listeners[0], {
       type: "SAVE_MONITORED_POLICY_SNAPSHOT",
       tabId: fixture.tab.id,

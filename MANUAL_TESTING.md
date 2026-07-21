@@ -29,6 +29,17 @@ The real-browser command automatically covers unpacked installation and first-ru
 
 Keep the manual items below: the automated baseline does not inspect permission-warning copy, real privacy sentinels, consent/cookie/storage behavior, SPA transition races, pause/exclusion/restricted states, hostile-page overlay tampering, browser-frame placement and controls, screen-reader speech, policy alarms and device sleep, monitoring network behavior, or export files.
 
+## Optional manual public-site smoke (never CI)
+
+This live check is an optional observation aid, not a repository gate. Run it sparingly, follow each public site's terms, and never add it to CI or release automation. Public pages can change, block automation, or vary by region independently of the extension.
+
+- [ ] Confirm the command refuses to start without `--live`, without exactly one of `--all` or `--only=<target-id,...>`, or when `CI` or `GITHUB_ACTIONS` is set.
+- [ ] Run `npm run test:live-sites:safety` first. Confirm it contacts only a temporary `127.0.0.1` fixture and verifies GET interception, disabled service-worker/worker/streaming/beacon/form/new-target paths, download denial, and clean shutdown. Do not continue if it fails.
+- [ ] Run `npm run test:live-sites -- --live --all` only when an intentional full live check is required. Add `--headed` to observe Chrome, or use `npm run test:live-sites -- --live --only=<target-id,...>` for a fixed subset.
+- [ ] Confirm the run visits public HTTPS pages sequentially without public-site clicks, scrolling, text input, form submission, login, purchase, or consent choices. On the instrumented page, confirm non-GET/non-HTTPS traffic, streaming transports, IP-literal/single-label/special-use local hosts, unexpected top-level origins, new non-extension targets, and downloads are blocked. The page also runs with service workers, workers, streaming APIs, WebRTC, beacon, popups, scripted forms, and scripted activation disabled; record a site broken by these restrictions as `inconclusive` rather than a product failure. Do not describe this page-target boundary as an OS-level network sandbox or as protection against public DNS names resolving to private addresses.
+- [ ] Confirm the report states that one clean temporary profile is shared for the run, not per target. HTTPS third-party GET subresources plus cookies/cache/third-party state may carry between selected targets so navigation and mode persistence can be tested. Confirm profile cleanup succeeds; if `cleanupErrors` is non-empty, identify that run's `unveily-public-smoke-*` directory under the OS temporary directory before removing only that profile.
+- [ ] Review the coarse local report under `reports/public-site-smoke/*.local.json`. Confirm every tested site passed its reviewed origin/path/query document fingerprint (fragment ignored) and in-memory content marker before extension assertions, and that changed/challenged/partially rendered pages are `inconclusive`. Confirm the report contains no raw page text, cookie values, paths, query strings, or raw request URLs, records only the necessary pass/warn/inconclusive/fail observations, and delete the local file when it is no longer needed.
+
 ## Installation, permissions, and first-run disclosure
 
 - [ ] Load the repository as an unpacked extension from `chrome://extensions`.
@@ -67,6 +78,7 @@ Use a controlled test build that forces the shared trusted-local-storage gate to
 
 ## Navigation and document isolation
 
+- [ ] Select cookie analysis, navigate and switch tabs, close and reopen the popup, and restart the Manifest V3 worker. Confirm cookie analysis remains selected and runs on the newly active page. Rapidly select cookie then current-page analysis and close the popup before the first write response; confirm current-page is the restored mode. Then run paste analysis and confirm it does not replace the saved web-analysis mode.
 - [ ] Navigate from site A to site B in one tab. Confirm site A requests, cookies, snapshots, and badge state are not attached to site B.
 - [ ] Reload the same URL and confirm a new top-level `documentId` creates a fresh observation generation.
 - [ ] Change query and fragment routes and confirm query/fragment-sensitive document identity rotates without persisting the raw fingerprint.
