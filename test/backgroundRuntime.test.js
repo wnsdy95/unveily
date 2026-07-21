@@ -45,6 +45,7 @@ function createChromeMock(options = {}) {
     ]
   ]);
   const localData = {};
+  const localDataWaiters = new Set();
   const sessionData = {};
   const sessionSetCalls = [];
   const sessionRemoveCalls = [];
@@ -77,6 +78,7 @@ function createChromeMock(options = {}) {
     },
     async set(values) {
       Object.assign(localData, values);
+      for (const waiter of Array.from(localDataWaiters)) waiter();
     }
   };
   const sessionStorage = {
@@ -199,6 +201,36 @@ function createChromeMock(options = {}) {
     sessionSetCalls,
     sessionRemoveCalls,
     tabMessages,
+    waitForLocalData(predicate, timeoutMs = 10_000) {
+      if (typeof predicate !== "function") throw new TypeError("A local-data predicate is required");
+
+      let timeoutId;
+      return new Promise((resolve, reject) => {
+        const inspect = () => {
+          let value;
+          try {
+            value = predicate(localData);
+          } catch (error) {
+            localDataWaiters.delete(inspect);
+            clearTimeout(timeoutId);
+            reject(error);
+            return true;
+          }
+          if (!value) return false;
+          localDataWaiters.delete(inspect);
+          clearTimeout(timeoutId);
+          resolve(value);
+          return true;
+        };
+
+        if (inspect()) return;
+        localDataWaiters.add(inspect);
+        timeoutId = setTimeout(() => {
+          localDataWaiters.delete(inspect);
+          reject(new Error("Timed out waiting for local storage data"));
+        }, timeoutMs);
+      });
+    },
     setTabsGetHook(hook) {
       tabsGetCallCount = 0;
       tabsGetHook = typeof hook === "function" ? hook : null;
@@ -279,33 +311,42 @@ async function verifyIncrementalPolicyHealth(mock, onMessage) {
   const secondFetch = new Promise((resolve) => {
     releaseSecondFetch = resolve;
   });
+  let secondFetchReleased = false;
   const response = () =>
     new Response(policyText, {
       status: 200,
       headers: { "content-type": "text/plain; charset=utf-8" }
     });
+  const releaseBlockedSecondFetch = () => {
+    if (secondFetchReleased) return;
+    secondFetchReleased = true;
+    releaseSecondFetch(response());
+  };
   globalThis.fetch = async (url) => {
     if (url === secondUrl) return secondFetch;
     return response();
   };
 
+  let resultPromise;
   try {
-    const resultPromise = sendRuntimeMessage(onMessage, {
+    const firstHealthStored = mock.waitForLocalData(
+      (localData) => localData[POLICY_CHECK_HEALTH_KEY]?.[firstSnapshot.key]
+    );
+    resultPromise = sendRuntimeMessage(onMessage, {
       type: "CHECK_SAVED_POLICIES_NOW"
     });
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      if (mock.localData[POLICY_CHECK_HEALTH_KEY]?.[firstSnapshot.key]) break;
-      await flushBackgroundWork();
-    }
+    await firstHealthStored;
     assert.ok(mock.localData[POLICY_CHECK_HEALTH_KEY]?.[firstSnapshot.key]);
     assert.equal(mock.localData[POLICY_CHECK_HEALTH_KEY]?.[secondSnapshot.key], undefined);
 
-    releaseSecondFetch(response());
+    releaseBlockedSecondFetch();
     const result = await resultPromise;
     assert.equal(result.ok, true);
     assert.equal(result.checked, 2);
     assert.ok(mock.localData[POLICY_CHECK_HEALTH_KEY]?.[secondSnapshot.key]);
   } finally {
+    releaseBlockedSecondFetch();
+    await resultPromise?.catch(() => {});
     globalThis.fetch = originalFetch;
   }
 }
