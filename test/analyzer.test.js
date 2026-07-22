@@ -600,9 +600,285 @@ test("does not accept a policy footer link or bare title as policy body", () => 
     "Welcome to our shop. Browse products and contact support. About Careers Privacy Policy Terms of Service Copyright 2026."
   );
   const bareTitle = analyzePolicy("Privacy Policy");
+  const koreanBareTitle = analyzePolicy("개인정보 처리방침");
 
   assert.equal(footer.status, "not_policy");
   assert.equal(bareTitle.status, "not_policy");
+  assert.equal(koreanBareTitle.status, "not_policy");
+});
+
+test("does not combine ordinary page copy with weak policy footer signals", () => {
+  const wikipediaStyleFooter = analyzePolicy(
+    "Wikipedia helps people find public knowledge. By using this site, you agree to the Terms of Use and Privacy Policy."
+  );
+  const koreanFooter = analyzePolicy(
+    "새로운 소식과 공개 자료를 확인하세요. 서비스를 계속 사용하면 이용약관에 동의하며 개인정보 처리방침을 확인할 수 있습니다."
+  );
+  const genericDataCopy = analyzePolicy(
+    "We use data to rank public search results. Explore articles and community projects. Privacy Policy Terms of Use."
+  );
+  const genericRightsCopy = analyzePolicy(
+    "Visitors have the right to access public articles. Explore community projects. Privacy Policy Terms of Use."
+  );
+  const headerBeforeGenericCopy = analyzePolicy(
+    "Privacy Policy Terms of Use. We use data to rank public search results. Explore community projects."
+  );
+  const headerBeforeExpositoryCopy = analyzePolicy(
+    "Privacy Policy Terms of Use. This article explains how Acme collects personal information from public court records."
+  );
+  const headerBeforePageCopy = analyzePolicy(
+    "Privacy Policy Terms of Use. This page describes how Acme collects personal information from public court records."
+  );
+  const headerBeforeLearningCopy = analyzePolicy(
+    "Privacy Policy Terms of Use. Learn how Acme collects personal information from public court records."
+  );
+  const emailButtonCopy = analyzePolicy(
+    "Use the email button to share this article with friends."
+  );
+
+  for (const result of [
+    wikipediaStyleFooter,
+    koreanFooter,
+    genericDataCopy,
+    genericRightsCopy,
+    headerBeforeGenericCopy,
+    headerBeforeExpositoryCopy,
+    headerBeforePageCopy,
+    headerBeforeLearningCopy,
+    emailButtonCopy
+  ]) {
+    assert.equal(result.status, "not_policy");
+    assert.equal(result.score, null);
+    assert.equal(result.level, "unknown");
+  }
+});
+
+test("requires substantive context for ambiguous data and terms language", () => {
+  const ordinaryDataCopy = analyzePolicy("We use data to rank public search results.");
+  const ordinaryDeveloperCopy = analyzePolicy(
+    "This guide explains intellectual property concepts for application developers."
+  );
+  const ordinaryAcceptableUseCopy = analyzePolicy(
+    "This article compares acceptable use approaches for online communities."
+  );
+  const contextualDataPolicy = analyzePolicy(
+    "Privacy Policy. Introduction. We process information when you create an account."
+  );
+  const headingFreeDataPolicy = analyzePolicy(
+    "We collect information about you when you create an account."
+  );
+  const contextualTerms = analyzePolicy(
+    "Terms of Service. Acceptable use rules prohibit abuse. Intellectual property rights remain with their respective owners."
+  );
+  const ambiguousShortTerms = analyzePolicy(
+    "Terms of Service. By using the service, you agree to these terms and agree to be bound."
+  );
+  const ambiguousKoreanTerms = analyzePolicy(
+    "이용약관. 서비스를 이용하면 이 약관에 동의합니다."
+  );
+
+  assert.equal(ordinaryDataCopy.status, "not_policy");
+  assert.equal(ordinaryDeveloperCopy.status, "not_policy");
+  assert.equal(ordinaryAcceptableUseCopy.status, "not_policy");
+  assert.equal(contextualDataPolicy.status, "analyzed");
+  assert.equal(headingFreeDataPolicy.status, "analyzed");
+  assert.equal(contextualTerms.status, "analyzed");
+  assert.equal(ambiguousShortTerms.status, "not_policy");
+  assert.equal(ambiguousKoreanTerms.status, "not_policy");
+});
+
+test("recognizes privacy-specific rights without accepting ordinary access language", () => {
+  const privacyRights = analyzePolicy(
+    "Privacy Policy. You have the right to access your personal information."
+  );
+  const ordinaryAccess = analyzePolicy(
+    "Privacy Policy Terms of Use. Visitors have the right to access public articles."
+  );
+
+  assert.equal(privacyRights.status, "analyzed");
+  assert.equal(ordinaryAccess.status, "not_policy");
+});
+
+test("recognizes named-company, reduced-passive, and Korean list-style policies", () => {
+  const namedCompany = analyzePolicy(
+    "Privacy Policy. Acme collects personal information when you register an account."
+  );
+  const namedCorporation = analyzePolicy(
+    "Privacy Policy. Example Corporation processes personal data to provide the service."
+  );
+  const reducedPassive = analyzePolicy(
+    "Privacy Policy. Personal data collected from you includes your email address."
+  );
+  const namedCompanyUse = analyzePolicy(
+    "Privacy Policy. Acme uses personal information to provide its products."
+  );
+  const passiveUse = analyzePolicy(
+    "Privacy Policy. Your personal information may be used to provide the service."
+  );
+  const koreanHeading = analyzePolicy(
+    "개인정보 처리방침. 개인정보 수집 및 이용. 수집 항목: 이름, 이메일, 전화번호."
+  );
+  const koreanList = analyzePolicy(
+    "개인정보 처리방침. 개인정보 수집 항목: 이름, 이메일. 이용 목적: 회원 관리."
+  );
+
+  for (const result of [
+    namedCompany,
+    namedCorporation,
+    reducedPassive,
+    namedCompanyUse,
+    passiveUse,
+    koreanHeading,
+    koreanList
+  ]) {
+    assert.equal(result.status, "analyzed");
+  }
+});
+
+test("recognizes provider termination clauses with standard reservation language", () => {
+  const namedProvider = analyzePolicy(
+    "Terms of Service. Acme reserves the right to terminate your account for material violations."
+  );
+  const genericProvider = analyzePolicy(
+    "Terms of Service. The company reserves the right to suspend your account for abuse."
+  );
+  const userClosureHelp = analyzePolicy(
+    "Terms of Service Privacy Policy. You may close your account from Settings at any time."
+  );
+
+  assert.equal(namedProvider.status, "analyzed");
+  assert.equal(genericProvider.status, "analyzed");
+  assert.equal(userClosureHelp.status, "not_policy");
+});
+
+test("recognizes concrete data fields in passive privacy disclosures", () => {
+  const disclosures = [
+    "Privacy Policy. Your email address is collected when you create an account.",
+    "Privacy Notice. Your name is stored while your account remains active.",
+    "Privacy Policy. A phone number may be collected for account recovery.",
+    "Cookie Policy. A cookie is stored on your device to remember your preferences.",
+    "Privacy Policy. Location is collected to provide nearby results.",
+    "Privacy Policy. Payment information is processed to complete purchases."
+  ];
+
+  for (const disclosure of disclosures) {
+    assert.equal(analyzePolicy(disclosure).status, "analyzed", disclosure);
+  }
+});
+
+test("recognizes request-style privacy rights and Korean liability disclaimers", () => {
+  const deletionRight = analyzePolicy(
+    "Privacy Policy. You may request deletion of your personal information at any time."
+  );
+  const combinedRights = analyzePolicy(
+    "Privacy Policy. You can access, correct, or erase your personal information."
+  );
+  const koreanLiability = analyzePolicy(
+    "이용약관. 회사는 간접 손해에 대한 책임을 지지 않습니다."
+  );
+
+  assert.equal(deletionRight.status, "analyzed");
+  assert.equal(combinedRights.status, "analyzed");
+  assert.equal(koreanLiability.status, "analyzed");
+  assert.equal(koreanLiability.risks.some((risk) => risk.id === "liability_limit"), true);
+});
+
+test("does not treat account-help imperatives as privacy rights or data practices", () => {
+  const accessHelp = analyzePolicy(
+    "Privacy Policy Terms of Service. Account settings. Access your account information from the profile menu. Update your avatar and contact support."
+  );
+  const correctionHelp = analyzePolicy(
+    "Privacy Policy Terms of Service. Account settings. Correct your account information in the profile editor."
+  );
+  const deletionHelp = analyzePolicy(
+    "Privacy Policy Terms of Service. Account settings. Delete your account information from Settings at any time."
+  );
+  const infinitiveHelp = analyzePolicy(
+    "Privacy Policy Terms of Service. To delete your account information, open Settings and choose Delete."
+  );
+  const howToHelp = analyzePolicy(
+    "Privacy Policy Terms of Service. How to delete your account information from the profile menu."
+  );
+  const gerundHelp = analyzePolicy(
+    "Privacy Policy Terms of Service. Deleting your account information removes saved preferences."
+  );
+  const clickHelp = analyzePolicy(
+    "Privacy Policy Terms of Service. Click Delete to remove your account information from this device."
+  );
+  const modalAccessHelp = analyzePolicy(
+    "Privacy Policy Terms of Service. You can access your account information from the profile menu."
+  );
+
+  for (const result of [
+    accessHelp,
+    correctionHelp,
+    deletionHelp,
+    infinitiveHelp,
+    howToHelp,
+    gerundHelp,
+    clickHelp,
+    modalAccessHelp
+  ]) {
+    assert.equal(result.status, "not_policy");
+    assert.equal(result.score, null);
+  }
+});
+
+test("does not infer policy clauses from descriptive articles or user tools", () => {
+  const publicDatasetArticle = analyzePolicy(
+    "We collect information about public monuments from libraries and publish it for readers."
+  );
+  const userTool = analyzePolicy(
+    "The service helps you collect data from public APIs and visualize it."
+  );
+  const publicMapTool = analyzePolicy(
+    "We collect information when you create a public map from open geographic records."
+  );
+  const searchTool = analyzePolicy(
+    "We process data when you submit a search query to public archives."
+  );
+  const termsArticle = analyzePolicy(
+    "This article compares acceptable use and intellectual property concepts for developers."
+  );
+  const arbitrationArticle = analyzePolicy(
+    "This article explains how binding arbitration affects consumers."
+  );
+  const prescriptiveArbitrationGuide = analyzePolicy(
+    "This guide explains why users must understand binding arbitration before choosing a phone plan."
+  );
+  const classActionArticle = analyzePolicy(
+    "This article explains why consumers may waive valuable class action remedies."
+  );
+
+  for (const result of [
+    publicDatasetArticle,
+    userTool,
+    publicMapTool,
+    searchTool,
+    termsArticle,
+    arbitrationArticle,
+    prescriptiveArbitrationGuide,
+    classActionArticle
+  ]) {
+    assert.equal(result.status, "not_policy");
+    assert.equal(result.score, null);
+  }
+});
+
+test("does not discard real privacy practices that mention reports or news", () => {
+  const creditReport = analyzePolicy(
+    "Privacy Policy. We collect personal information from a credit report to review your application."
+  );
+  const fraudReport = analyzePolicy(
+    "Privacy Policy. We collect your account data for a report and review it for fraud."
+  );
+  const newsPreferences = analyzePolicy(
+    "Privacy Policy. We collect personal information about news you read to show relevant stories."
+  );
+
+  assert.equal(creditReport.status, "analyzed");
+  assert.equal(fraudReport.status, "analyzed");
+  assert.equal(newsPreferences.status, "analyzed");
 });
 
 test("recognizes inflected data-practice verbs in policy text", () => {

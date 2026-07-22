@@ -764,7 +764,7 @@ const RISK_RULES = [
     id: "liability_limit",
     severity: "medium",
     title: "책임 제한 조항",
-    patterns: [/limitation of liability|not liable|disclaim/i, /책임.{0,120}제한|면책|손해.{0,120}책임.{0,80}없/],
+    patterns: [/limitation of liability|not liable|disclaim/i, /책임.{0,120}제한|면책|손해.{0,120}책임.{0,80}(?:없|지지\s*않)/],
     advice: "서비스 장애, 데이터 손실, 보안 사고에 대한 책임을 과도하게 배제하는지 살펴보세요."
   },
   {
@@ -1455,22 +1455,131 @@ function getRiskEvidence(rule, sentences) {
   return hit ? truncateText(hit, 220) : "";
 }
 
+const PRIVACY_DOCUMENT_MARKER_PATTERN = /privacy policy|privacy notice|cookie policy|data protection notice|개인정보\s*처리방침|개인정보\s*보호정책/i;
+const TERMS_DOCUMENT_MARKER_PATTERN = /terms (?:of use|of service|and conditions)|user agreement|이용약관|서비스\s*약관/i;
+const POLICY_DOCUMENT_MARKER_PATTERN = new RegExp(
+  `${PRIVACY_DOCUMENT_MARKER_PATTERN.source}|${TERMS_DOCUMENT_MARKER_PATTERN.source}`,
+  "i"
+);
+const POLICY_DOCUMENT_MARKER_GLOBAL_PATTERN = new RegExp(
+  POLICY_DOCUMENT_MARKER_PATTERN.source,
+  "gi"
+);
+const POLICY_CONTROLLER_SOURCE = String.raw`(?:we|the company|our company|the provider|service provider|our organization|the organization|the operator|data controller)`;
+const POLICY_ACTION_MODIFIER_SOURCE = String.raw`(?:(?:may|might|can|could|will|would|shall|do|does|did|not|also|knowingly|automatically|generally|sometimes)\s+){0,5}`;
+const POLICY_CORE_DATA_ACTION_SOURCE = String.raw`(?:collect(?:s|ed|ing)?|process(?:es|ed|ing)?|retain(?:s|ed|ing)?|store[sd]?|storing|delete[sd]?|deleting)`;
+const POLICY_TRANSFER_DATA_ACTION_SOURCE = String.raw`(?:share[sd]?|sharing|sell(?:s|ing)?|sold)`;
+const POLICY_USE_DATA_ACTION_SOURCE = String.raw`(?:use[sd]?|using)`;
+const POLICY_PERSONAL_DATA_OBJECT_SOURCE = String.raw`(?:personal (?:data|information)|(?:your|user|customer|account) (?:data|information)|(?:data|information) (?:about|from|provided by) you|ip address|device identifier)`;
+const POLICY_CONCRETE_DATA_OBJECT_SOURCE = String.raw`(?:your name|name|email(?: address)?|phone(?: number)?|cookies?|location|payment information)`;
+const POLICY_SPECIFIC_DATA_OBJECT_SOURCE = `(?:${POLICY_PERSONAL_DATA_OBJECT_SOURCE}|${POLICY_CONCRETE_DATA_OBJECT_SOURCE})`;
+const POLICY_GENERIC_DATA_OBJECT_SOURCE = String.raw`(?:information|data)`;
+const POLICY_USER_NEXUS_PATTERN = /\b(?:(?:data|information) (?:about|from|provided by) you|when you (?:(?:create|register) (?:an? |your )?account|sign up|submit (?:a form|personal (?:data|information)|your (?:data|information)))|your account)\b/i;
+const POLICY_EXPOSITORY_FRAME_PATTERN = /^\s*(?:(?:this|the|our|a|an)\s+(?:article|guide|overview|tutorial|report|study|page|news(?: story)?)\s+(?:(?:explains?|compares?|discusses?|describes?|shows?|teaches?|reviews?)\b|on how\b)|learn how\b)/i;
+const POLICY_IMPERATIVE_DATA_ACTION_PATTERN = /^\s*(?:collect|process|retain|store|delete|share|sell|use)\b/i;
+const POLICY_ACCOUNT_HELP_PATTERN = /^\s*(?:(?:to|how to)\s+(?:access|correct|delete|erase|remove|close|suspend|update)|(?:accessing|correcting|deleting|erasing|removing|closing|suspending|updating)\b|click\b.{0,60}\b(?:access|correct|delete|erase|remove|close|suspend|update)\b).{0,160}\b(?:your )?account (?:data|information)\b/i;
+const POLICY_CONTROLLER_SPECIFIC_PRACTICE_PATTERN = new RegExp(
+  String.raw`\b${POLICY_CONTROLLER_SOURCE}\b\s+${POLICY_ACTION_MODIFIER_SOURCE}(?:${POLICY_CORE_DATA_ACTION_SOURCE}|${POLICY_TRANSFER_DATA_ACTION_SOURCE}|${POLICY_USE_DATA_ACTION_SOURCE})\b.{0,120}\b${POLICY_SPECIFIC_DATA_OBJECT_SOURCE}\b|\b${POLICY_SPECIFIC_DATA_OBJECT_SOURCE}\b.{0,120}\b${POLICY_CONTROLLER_SOURCE}\b\s+${POLICY_ACTION_MODIFIER_SOURCE}(?:${POLICY_CORE_DATA_ACTION_SOURCE}|${POLICY_TRANSFER_DATA_ACTION_SOURCE}|${POLICY_USE_DATA_ACTION_SOURCE})\b`,
+  "i"
+);
+const POLICY_CONTROLLER_GENERIC_PRACTICE_PATTERN = new RegExp(
+  String.raw`\b${POLICY_CONTROLLER_SOURCE}\b\s+${POLICY_ACTION_MODIFIER_SOURCE}(?:${POLICY_CORE_DATA_ACTION_SOURCE}|${POLICY_TRANSFER_DATA_ACTION_SOURCE})\b.{0,120}\b${POLICY_GENERIC_DATA_OBJECT_SOURCE}\b|\b${POLICY_GENERIC_DATA_OBJECT_SOURCE}\b.{0,120}\b${POLICY_CONTROLLER_SOURCE}\b\s+${POLICY_ACTION_MODIFIER_SOURCE}(?:${POLICY_CORE_DATA_ACTION_SOURCE}|${POLICY_TRANSFER_DATA_ACTION_SOURCE})\b`,
+  "i"
+);
+const POLICY_DIRECT_SPECIFIC_PRACTICE_PATTERN = new RegExp(
+  String.raw`\b(?:${POLICY_CORE_DATA_ACTION_SOURCE}|${POLICY_TRANSFER_DATA_ACTION_SOURCE}|${POLICY_USE_DATA_ACTION_SOURCE})\b.{0,120}\b${POLICY_PERSONAL_DATA_OBJECT_SOURCE}\b|\b${POLICY_PERSONAL_DATA_OBJECT_SOURCE}\b.{0,120}\b(?:is|are|may be|might be|can be|will be)?\s*(?:collected|processed|used|shared|sold|retained|stored|deleted)\b`,
+  "i"
+);
+const POLICY_DIRECT_CONCRETE_PRACTICE_PATTERN = new RegExp(
+  String.raw`\b(?:${POLICY_CORE_DATA_ACTION_SOURCE}|${POLICY_TRANSFER_DATA_ACTION_SOURCE})\b.{0,120}\b${POLICY_CONCRETE_DATA_OBJECT_SOURCE}\b|\b${POLICY_CONCRETE_DATA_OBJECT_SOURCE}\b.{0,120}\b(?:is|are|may be|might be|can be|will be)?\s*(?:collected|processed|used|shared|sold|retained|stored|deleted)\b|\b${POLICY_USE_DATA_ACTION_SOURCE}\b.{0,80}\bcookies?\b`,
+  "i"
+);
+const KOREAN_POLICY_DATA_ACTION_PATTERN = /(?:수집|처리|이용|사용|제공|공유|판매|보유|저장|파기|삭제)(?:하|합|됩|되|했|할|해)/;
+const KOREAN_POLICY_BARE_DATA_ACTION_PATTERN = /(?:수집|처리|이용|사용|제공|공유|판매|보유|저장|파기|삭제)/;
+const KOREAN_POLICY_DATA_OBJECT_PATTERN = /(?:개인정보|개인\s*정보|아동.{0,12}정보|이름|이메일|전화번호|쿠키|위치|결제\s*정보)/;
+const KOREAN_POLICY_CONTROLLER_PATTERN = /(?:회사|당사|서비스\s*제공자|운영자|개인정보처리자)/;
+
+function policyEvidenceText(sentence) {
+  return String(sentence || "").replace(
+    POLICY_DOCUMENT_MARKER_GLOBAL_PATTERN,
+    (marker) => " ".repeat(marker.length)
+  );
+}
+
+function hasLeadingDocumentMarker(text, markerPattern) {
+  const markerMatch = markerPattern.exec(text);
+  if (!markerMatch) return false;
+  return markerMatch.index <= Math.min(2_000, Math.floor(text.length * 0.4));
+}
+
 function assessPolicyText(text, sentences) {
   const normalized = text.toLowerCase();
-  const explicitPolicyMarker = /privacy policy|privacy notice|cookie policy|terms (?:of use|of service|and conditions)|user agreement|data protection notice|개인정보\s*처리방침|개인정보\s*보호정책|이용약관|서비스\s*약관/.test(normalized);
-  const dataPractice = sentences.some(
-    (sentence) =>
-      (/\b(?:collect(?:s|ed|ing)?|process(?:es|ed|ing)?|use[sd]?|using|share[sd]?|sharing|sell(?:s|ing)?|sold|retain(?:s|ed|ing)?|store[sd]?|storing|delete[sd]?|deleting)\b/i.test(sentence) &&
-        /\b(?:personal (?:data|information)|information|data|name|email|phone|cookie|location|payment)\b/i.test(sentence)) ||
-      (/(?:개인정보|개인\s*정보|아동.{0,12}정보|이름|이메일|전화번호|쿠키|위치|결제\s*정보)/.test(sentence) &&
-        /(?:수집|처리|이용|사용|제공|공유|판매|보유|저장|파기|삭제)/.test(sentence))
+  const explicitPolicyMarker = POLICY_DOCUMENT_MARKER_PATTERN.test(normalized);
+  const leadingPrivacyMarker = hasLeadingDocumentMarker(text, PRIVACY_DOCUMENT_MARKER_PATTERN);
+  const leadingTermsMarker = hasLeadingDocumentMarker(text, TERMS_DOCUMENT_MARKER_PATTERN);
+  const dataPractice = sentences.some((sentence) => {
+    const evidenceText = policyEvidenceText(sentence);
+    if (
+      POLICY_EXPOSITORY_FRAME_PATTERN.test(evidenceText) ||
+      POLICY_ACCOUNT_HELP_PATTERN.test(evidenceText)
+    ) {
+      return false;
+    }
+    return (
+      POLICY_CONTROLLER_SPECIFIC_PRACTICE_PATTERN.test(evidenceText) ||
+      (POLICY_CONTROLLER_GENERIC_PRACTICE_PATTERN.test(evidenceText) &&
+        (leadingPrivacyMarker || POLICY_USER_NEXUS_PATTERN.test(evidenceText))) ||
+      (leadingPrivacyMarker &&
+        !POLICY_IMPERATIVE_DATA_ACTION_PATTERN.test(evidenceText) &&
+        (POLICY_DIRECT_SPECIFIC_PRACTICE_PATTERN.test(evidenceText) ||
+          POLICY_DIRECT_CONCRETE_PRACTICE_PATTERN.test(evidenceText))) ||
+      (KOREAN_POLICY_DATA_OBJECT_PATTERN.test(evidenceText) &&
+        ((KOREAN_POLICY_DATA_ACTION_PATTERN.test(evidenceText) &&
+          (leadingPrivacyMarker || KOREAN_POLICY_CONTROLLER_PATTERN.test(evidenceText))) ||
+          (leadingPrivacyMarker && KOREAN_POLICY_BARE_DATA_ACTION_PATTERN.test(evidenceText))))
+    );
+  });
+  const englishPrivacyRightsPattern = /\b(?:right to (?:access|delete|erasure)|withdraw consent|retention period|retain(?:ed)? for|request (?:access(?: to)?|correction(?: of)?|deletion(?: of)?|erasure(?: of)?)|you (?:may|can) (?:access|correct|delete|erase))\b.{0,120}\b(?:personal|your|user|customer) (?:data|information)\b|\bdata subject\b/i;
+  const koreanPrivacyRightsPattern = /정보주체|(?:동의\s*철회|열람|정정|보유\s*기간|파기).{0,120}(?:개인정보|개인\s*정보)|(?:개인정보|개인\s*정보).{0,120}(?:동의\s*철회|열람|정정|보유\s*기간|파기)/;
+  const rightsOrRetention = sentences.some((sentence) => {
+    const evidenceText = policyEvidenceText(sentence);
+    if (POLICY_EXPOSITORY_FRAME_PATTERN.test(evidenceText)) return false;
+    return (
+      leadingPrivacyMarker &&
+      (englishPrivacyRightsPattern.test(evidenceText) || koreanPrivacyRightsPattern.test(evidenceText))
+    );
+  });
+  const termsEvidenceSentences = sentences
+    .map(policyEvidenceText)
+    .filter((sentence) => !POLICY_EXPOSITORY_FRAME_PATTERN.test(sentence));
+  const prescriptiveArbitrationClause = termsEvidenceSentences.some((sentence) =>
+    /\b(?:dispute|claim|controversy|party|parties|you|user).{0,100}(?:subject to|resolved by|requires?|must|shall|will).{0,80}binding arbitration\b|\bbinding arbitration\b.{0,80}(?:is required|shall|required|must|waive)/i.test(sentence)
   );
-  const rightsOrRetention = /right to (?:access|delete|erasure)|withdraw consent|retention period|retain for|data subject|정보주체|동의\s*철회|열람|정정|보유\s*기간|파기/.test(
-    normalized
+  const prescriptiveClassActionClause = termsEvidenceSentences.some((sentence) =>
+    /\b(?:waive|waiver|may not bring|no)\b.{0,80}\bclass action\b/i.test(sentence)
   );
-  const termsClause = /binding arbitration|class action waiver|limitation of liability|governing law|terminate (?:your )?account|agree to (?:these|the) terms|agree to be bound|acceptable use|intellectual property|중재|집단소송|책임\s*제한|면책|준거법|관할\s*법원|계정.{0,120}(?:해지|정지)|약관에\s*동의|금지\s*행위|지식재산권/.test(
-    normalized
-  );
+  const contextualLiabilityClause =
+    termsEvidenceSentences.some((sentence) =>
+      /limitation of liability|\bnot liable\b|\bdisclaim(?:er|s|ed|ing)?\b|책임\s*제한|면책|손해.{0,120}책임(?:을|이)?\s*(?:지지\s*않|없)/i.test(sentence)
+    );
+  const providerTerminationClause =
+    termsEvidenceSentences.some((sentence) =>
+      /\b(?:we|the company|our company|the provider|service provider)\b\s+(?:(?:may|can|will|shall|also)\s+){0,4}(?:suspend|terminate|close)\b.{0,80}\b(?:your )?account\b|\breserves? the right to\s+(?:suspend|terminate|close)\b.{0,80}\b(?:your )?account\b|(?:회사|서비스\s*제공자).{0,80}계정.{0,80}(?:해지|정지)/i.test(sentence)
+    );
+  const normalizedTermsEvidence = termsEvidenceSentences.join(" ").toLowerCase();
+  const weakTermsSignalCount = [
+    /\b(?:these terms|this agreement)\b.{0,100}\b(?:governed by|construed under|governing law)\b|준거법|관할\s*법원/i,
+    /acceptable use.{0,100}(?:prohibit|must|may not|rules?)|금지\s*행위/i,
+    /intellectual property.{0,100}(?:rights?|ownership|licen[cs]e|remain|belong)|지식재산권/i,
+    /agree to (?:these|the) terms|agree to be bound|약관에\s*동의/i
+  ].filter((pattern) => pattern.test(normalizedTermsEvidence)).length;
+  const termsClause =
+    leadingTermsMarker &&
+    (prescriptiveArbitrationClause ||
+      prescriptiveClassActionClause ||
+      contextualLiabilityClause ||
+      providerTerminationClause ||
+      weakTermsSignalCount >= 2);
   const score = Math.min(
     1,
     // A footer link or title alone is not enough evidence that the supplied
@@ -1480,7 +1589,7 @@ function assessPolicyText(text, sentences) {
 
   return {
     score,
-    likely: score >= 0.5
+    likely: score >= 0.5 && (dataPractice || rightsOrRetention || termsClause)
   };
 }
 
