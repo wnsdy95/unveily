@@ -4,8 +4,25 @@ import {
   saveCustomVendorRules,
   isValidCustomVendorRule
 } from "./customRulesStorage.js";
-import { deletePolicySnapshot, loadPolicySnapshots } from "./policySnapshots.js";
-import { applyI18n, getLocalePreference, setLocalePreference, t } from "./i18n.js";
+import {
+  deletePolicySnapshot,
+  loadPolicyCheckHealth,
+  loadPolicySnapshots
+} from "./policySnapshots.js";
+import {
+  loadObservationSettings,
+  OBSERVATION_SETTINGS_VALIDATION_ERRORS,
+  saveObservationSettings,
+  validateObservationSettingsInput
+} from "./observationSettings.js";
+import {
+  applyI18n,
+  applyI18nWithoutStorage,
+  getLocalePreference,
+  setLocalePreference,
+  t
+} from "./i18n.js";
+import { ensureTrustedLocalStorage } from "./trustedLocalStorage.js";
 
 const ruleForm = document.querySelector("#ruleForm");
 const ruleId = document.querySelector("#ruleId");
@@ -18,13 +35,35 @@ const snapshotList = document.querySelector("#snapshotList");
 const statusEl = document.querySelector("#status");
 const cancelEditButton = document.querySelector("#cancelEditButton");
 const languageSelect = document.querySelector("#uiLanguageSelect");
+const observationEnabled = document.querySelector("#observationEnabled");
+const excludedOrigins = document.querySelector("#excludedOrigins");
+const saveObservationSettingsButton = document.querySelector("#saveObservationSettingsButton");
 
 let rules = [];
 let snapshots = {};
+let policyCheckHealth = {};
+
+const POLICY_HEALTH_ERROR_MESSAGE_KEYS = {
+  network: "policyCheckErrorNetwork",
+  timeout: "policyCheckErrorTimeout",
+  http_status: "policyCheckErrorHttpStatus",
+  redirect: "policyCheckErrorRedirect",
+  content_type: "policyCheckErrorContentType",
+  response_too_large: "policyCheckErrorResponseTooLarge",
+  invalid_url: "policyCheckErrorInvalidUrl",
+  not_policy: "policyCheckErrorNotPolicy",
+  unknown: "policyCheckErrorUnknown"
+};
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
   statusEl.classList.toggle("error", isError);
+}
+
+function setOptionsControlsEnabled(enabled) {
+  document.querySelectorAll("input, textarea, select, button").forEach((control) => {
+    control.disabled = !enabled;
+  });
 }
 
 function getSelectedSections() {
@@ -77,6 +116,37 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+function formatPolicyCheckTimestamp(value) {
+  const date = new Date(value || 0);
+  if (!Number.isFinite(date.getTime())) return t("notAvailable");
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(date);
+}
+
+function policyCheckStatus(snapshot) {
+  const health = policyCheckHealth[snapshot.key];
+  if (!health) return { error: false, text: t("policyCheckNeverAttempted") };
+  if (health.consecutiveFailures > 0) {
+    const errorMessageKey = POLICY_HEALTH_ERROR_MESSAGE_KEYS[health.errorCategory] || "policyCheckErrorUnknown";
+    return {
+      error: true,
+      text: t("policyCheckLastFailed", [
+        formatPolicyCheckTimestamp(health.lastAttemptAt),
+        health.consecutiveFailures,
+        t(errorMessageKey)
+      ])
+    };
+  }
+  return {
+    error: false,
+    text: t("policyCheckLastSucceeded", [
+      formatPolicyCheckTimestamp(health.lastSuccessAt || health.lastAttemptAt)
+    ])
+  };
+}
+
 async function loadRules() {
   rules = await loadCustomVendorRules();
   renderRules();
@@ -91,25 +161,31 @@ function renderSnapshots() {
 
   snapshotList.innerHTML = items
     .sort((a, b) => String(b.capturedAt).localeCompare(String(a.capturedAt)))
-    .map(
-      (snapshot) => `
+    .map((snapshot) => {
+      const checkStatus = policyCheckStatus(snapshot);
+      return `
         <article class="rule-item">
           <div>
             <strong>${escapeHtml(snapshot.origin)}</strong>
             <p>${escapeHtml(snapshot.title || snapshot.url)}</p>
+            <code class="snapshot-url" title="${escapeHtml(snapshot.url || "")}">${escapeHtml(snapshot.url || "")}</code>
             <span>${escapeHtml(snapshot.capturedAt || "")} · ${t("riskLevelTitle")} ${escapeHtml(snapshot.riskSummary?.level || t("notAvailable"))}</span>
+            <span class="snapshot-health${checkStatus.error ? " error" : ""}">${escapeHtml(checkStatus.text)}</span>
           </div>
           <div class="rule-actions">
-            <button type="button" data-action="delete-snapshot" data-origin="${escapeHtml(snapshot.origin)}" class="secondary danger">${t("delete")}</button>
+            <button type="button" data-action="delete-snapshot" data-key="${escapeHtml(snapshot.key || snapshot.origin)}" class="secondary danger">${t("delete")}</button>
           </div>
         </article>
-      `
-    )
+      `;
+    })
     .join("");
 }
 
 async function loadSnapshots() {
-  snapshots = await loadPolicySnapshots();
+  [snapshots, policyCheckHealth] = await Promise.all([
+    loadPolicySnapshots(),
+    loadPolicyCheckHealth()
+  ]);
   renderSnapshots();
 }
 
@@ -117,15 +193,46 @@ async function handleLanguageChange(event) {
   const selectedLocale = event.target.value;
   await setLocalePreference(selectedLocale);
   await applyI18n();
+  renderRules();
+  renderSnapshots();
   setStatus(t("statusLanguageUpdated"));
 }
 
-async function persistRules() {
-  await saveCustomVendorRules(rules);
+async function loadObservationControls() {
+  const settings = await loadObservationSettings();
+  observationEnabled.checked = settings.enabled;
+  excludedOrigins.value = settings.excludedOrigins.join("\n");
+}
+
+async function persistObservationControls() {
+  const validation = validateObservationSettingsInput({
+    enabled: observationEnabled.checked,
+    excludedOrigins: excludedOrigins.value.split(/[\n,]+/)
+  });
+  if (!validation.ok) {
+    const messageKey =
+      validation.error ===
+      OBSERVATION_SETTINGS_VALIDATION_ERRORS.TOO_MANY_EXCLUDED_ORIGINS
+        ? "statusObservationOriginsTooMany"
+        : "statusObservationOriginInvalid";
+    setStatus(t(messageKey), true);
+    return;
+  }
+  try {
+    const settings = await saveObservationSettings(validation.settings);
+    excludedOrigins.value = settings.excludedOrigins.join("\n");
+    setStatus(t("statusObservationSettingsSaved"));
+  } catch {
+    setStatus(t("statusStorageFailed"), true);
+  }
+}
+
+async function persistRules(nextRules) {
+  rules = await saveCustomVendorRules(nextRules);
   renderRules();
 }
 
-ruleForm.addEventListener("submit", async (event) => {
+async function handleRuleSubmit(event) {
   event.preventDefault();
 
   const normalized = normalizeCustomVendorRule({
@@ -142,19 +249,24 @@ ruleForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  const index = rules.findIndex((rule) => rule.id === normalized.id);
+  const nextRules = [...rules];
+  const index = nextRules.findIndex((rule) => rule.id === normalized.id);
   if (index >= 0) {
-    rules[index] = normalized;
+    nextRules[index] = normalized;
   } else {
-    rules.push(normalized);
+    nextRules.push(normalized);
   }
 
-  await persistRules();
-  resetForm();
-  setStatus(t("statusRuleSaved"));
-});
+  try {
+    await persistRules(nextRules);
+    resetForm();
+    setStatus(t("statusRuleSaved"));
+  } catch {
+    setStatus(t("statusStorageFailed"), true);
+  }
+}
 
-ruleList.addEventListener("click", async (event) => {
+async function handleRuleListClick(event) {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
 
@@ -162,9 +274,13 @@ ruleList.addEventListener("click", async (event) => {
   if (!selectedRule) return;
 
   if (button.dataset.action === "delete") {
-    rules = rules.filter((rule) => rule.id !== selectedRule.id);
-    await persistRules();
-    setStatus(t("statusRuleDeleted"));
+    if (!globalThis.confirm(t("confirmDeleteRule"))) return;
+    try {
+      await persistRules(rules.filter((rule) => rule.id !== selectedRule.id));
+      setStatus(t("statusRuleDeleted"));
+    } catch {
+      setStatus(t("statusStorageFailed"), true);
+    }
     return;
   }
 
@@ -175,29 +291,59 @@ ruleList.addEventListener("click", async (event) => {
   risk.value = selectedRule.risk;
   setSelectedSections(selectedRule.expectedPolicySections);
   setStatus(t("statusRuleLoaded"));
-});
+}
 
-snapshotList.addEventListener("click", async (event) => {
+async function handleSnapshotListClick(event) {
   const button = event.target.closest("button[data-action='delete-snapshot']");
   if (!button) return;
 
-  await deletePolicySnapshot(button.dataset.origin);
-  await loadSnapshots();
-  setStatus(t("statusSnapshotDeleted"));
-});
+  if (!globalThis.confirm(t("confirmDeleteSnapshot"))) return;
+  try {
+    const deleted = await deletePolicySnapshot(button.dataset.key);
+    await loadSnapshots();
+    setStatus(t(deleted ? "statusSnapshotDeleted" : "statusPolicyDeleteFailed"), !deleted);
+  } catch {
+    setStatus(t("statusStorageFailed"), true);
+  }
+}
 
-cancelEditButton.addEventListener("click", () => {
+function handleCancelEdit() {
   resetForm();
   setStatus("");
-});
+}
+
+function bindOptionsEvents() {
+  ruleForm.addEventListener("submit", handleRuleSubmit);
+  ruleList.addEventListener("click", handleRuleListClick);
+  snapshotList.addEventListener("click", handleSnapshotListClick);
+  cancelEditButton.addEventListener("click", handleCancelEdit);
+  languageSelect?.addEventListener("change", handleLanguageChange);
+  saveObservationSettingsButton?.addEventListener("click", persistObservationControls);
+}
 
 async function startOptions() {
-  await applyI18n();
-  const savedLocale = await getLocalePreference();
-  if (languageSelect) languageSelect.value = savedLocale;
-  languageSelect?.addEventListener("change", handleLanguageChange);
-  await loadRules();
-  await loadSnapshots();
+  setOptionsControlsEnabled(false);
+  const trustedLocalStorageAvailable = await ensureTrustedLocalStorage();
+  if (!trustedLocalStorageAvailable) {
+    applyI18nWithoutStorage();
+    observationEnabled.checked = false;
+    excludedOrigins.value = "";
+    setStatus(t("statusStorageIsolationUnavailable"), true);
+    return;
+  }
+
+  try {
+    await applyI18n();
+    const savedLocale = await getLocalePreference();
+    if (languageSelect) languageSelect.value = savedLocale;
+    await loadObservationControls();
+    await loadRules();
+    await loadSnapshots();
+    setOptionsControlsEnabled(true);
+    bindOptionsEvents();
+  } catch {
+    setStatus(t("statusStorageFailed"), true);
+  }
 }
 
 startOptions();

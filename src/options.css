@@ -14,6 +14,33 @@
   gap: 10px;
 }
 
+.observation-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.observation-controls p {
+  color: #475467;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.observation-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.observation-toggle input {
+  width: auto;
+}
+
+.observation-controls button {
+  justify-self: start;
+  padding: 0 16px;
+}
+
 input,
 select {
   width: 100%;
@@ -88,6 +115,23 @@ fieldset input {
   margin-top: 5px;
   color: #667085;
   font-size: 12px;
+}
+
+.snapshot-url {
+  display: block;
+  max-width: 650px;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  color: #475467;
+  font-size: 12px;
+}
+
+.rule-item .snapshot-health {
+  color: #067647;
+}
+
+.rule-item .snapshot-health.error {
+  color: #b42318;
 }
 
 button.danger {

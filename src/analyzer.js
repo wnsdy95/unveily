@@ -1,5 +1,13 @@
 import { classifyVendorHost } from "./vendorRules.js";
 import { localeCode } from "./i18n.js";
+import { registrableDomain } from "./publicSuffixRules.js";
+
+// Treat every policy body as attacker-controlled input. Keeping the analyzer's
+// own ceiling means callers cannot accidentally re-introduce an expensive
+// whole-document scan even if their UI or message validation changes later.
+export const MAX_POLICY_ANALYSIS_CHARS = 120_000;
+const MAX_ANALYSIS_SENTENCE_CHARS = 2_000;
+const ANALYSIS_SENTENCE_OVERLAP_CHARS = 160;
 
 const ANALYZER_TEXT = {
   ko: {
@@ -7,7 +15,8 @@ const ANALYZER_TEXT = {
       high: "높음",
       medium: "주의",
       low: "낮음",
-      moderate: "보통"
+      moderate: "보통",
+      unknown: "판단 불가"
     },
     dataCategoryLabels: {
       identity: "신원 정보",
@@ -73,7 +82,15 @@ const ANALYZER_TEXT = {
       analytics: "분석/성능 쿠키",
       advertising: "광고/마케팅 쿠키",
       social: "소셜/외부 연동 쿠키",
-      third_party: "제3자 제공/외부 파트너"
+      third_party: "제3자 제공/외부 파트너",
+      payment: "결제 처리",
+      support: "고객 지원",
+      error_monitoring: "오류 모니터링",
+      hosting: "호스팅/인프라",
+      authentication: "인증",
+      security: "보안",
+      cdn_security: "CDN/보안",
+      unknown: "분류되지 않은 외부 서비스"
     },
     consentCategoryReasons: {
       necessary: "로그인, 보안, 세션 유지처럼 서비스 제공에 필요한 범위입니다.",
@@ -82,7 +99,15 @@ const ANALYZER_TEXT = {
       analytics: "방문, 클릭, 체류 시간 같은 이용 행태를 측정할 수 있습니다.",
       advertising: "광고 식별, 맞춤형 광고, 외부 광고 네트워크 추적에 쓰일 수 있습니다.",
       social: "소셜 로그인, 공유 버튼, 외부 위젯이 사용자를 식별할 수 있습니다.",
-      third_party: "외부 사업자에게 쿠키나 식별자가 전달될 수 있습니다."
+      third_party: "외부 사업자에게 쿠키나 식별자가 전달될 수 있습니다.",
+      payment: "결제 승인과 부정 결제 방지를 위해 결제 사업자에게 정보가 전달될 수 있습니다.",
+      support: "고객 문의 처리 과정에서 지원 사업자가 일부 정보를 처리할 수 있습니다.",
+      error_monitoring: "장애 진단을 위해 오류와 기기 정보가 처리될 수 있습니다.",
+      hosting: "서비스 운영을 위해 호스팅 사업자가 데이터를 처리할 수 있습니다.",
+      authentication: "로그인과 본인 확인을 위해 인증 사업자가 정보를 처리할 수 있습니다.",
+      security: "보안 검증과 공격 방지를 위해 식별 정보가 처리될 수 있습니다.",
+      cdn_security: "콘텐츠 전송과 보안 방어를 위해 접속 정보가 처리될 수 있습니다.",
+      unknown: "외부 서비스의 실제 처리 목적을 직접 확인해야 합니다."
     },
     sensitiveFieldLabels: {
       contact: "연락처",
@@ -122,6 +147,7 @@ const ANALYZER_TEXT = {
     },
     finding: {
       noPolicyText: "분석할 텍스트가 없습니다.",
+      notPolicyText: "현재 텍스트를 약관 또는 개인정보처리방침으로 신뢰하기 어렵습니다.",
       jurisdiction_uncertain_title: "관할권 자동 판정이 불확실함",
       jurisdiction_uncertain_detail: "브라우저 언어, 타임존, 사이트 도메인만으로 한국/미국/GDPR 기준을 확정하지 못했습니다.",
       jurisdiction_uncertain_advice: "설정 화면에서 적용 기준을 사용자가 직접 선택할 수 있게 하는 것이 안전합니다.",
@@ -159,6 +185,8 @@ const ANALYZER_TEXT = {
       reject_hidden_in_preferences_advice: "필수 쿠키만 허용하거나 선택 동의를 거부하는 경로가 설정 화면 안에만 있는지 확인하세요.",
       tracking_despite_disabled_toggle_title: "추적 항목 비활성 상태에서 추적 동작 감지",
       tracking_despite_disabled_toggle_advice: "사용자가 거부한 뒤에도 SDK가 로드되거나 쿠키가 생성되는지 재현 테스트가 필요합니다.",
+      tracking_after_rejection_title: "거부 선택 이후 추적 동작 감지",
+      tracking_after_rejection_advice: "거부 이후 발생한 요청·쿠키가 필수 기능인지 확인하고, 광고·분석 추적기는 선택 동의 전까지 차단해야 합니다.",
       tracking_after_snapshot_title: "기준 저장 이후 추적 동작 발생",
       tracking_after_snapshot_advice: "동의 거부 직후 저장한 기준이라면, 거부 이후에도 추적이 시작되는지 재현 확인이 필요합니다.",
       write_request_after_snapshot_title: "기준 저장 이후 데이터 전송 요청",
@@ -200,7 +228,6 @@ const ANALYZER_TEXT = {
     findingTemplates: {
       noPolicyText: "분석할 텍스트가 없습니다.",
       undisclosedThirdParties: "$1로 요청이 발생했습니다.",
-      vendorPolicyGap: "$1은(는) $2 근거가 필요합니다.",
       trackerWithoutDisclosure: "$1 같은 추적성 도메인이 감지됐습니다.",
       sensitiveFieldsWithoutCategory: "$1 필드명이 감지됐습니다.",
       insecureHttp: "$1 요청이 HTTP로 발생했습니다.",
@@ -215,7 +242,11 @@ const ANALYZER_TEXT = {
       writeRequestAfterSnapshot: "$1로 쓰기 요청이 발생했습니다.",
       trackingWithoutVisibleConsent: "$1개 추적성 요청, $2개 추적성 쿠키가 관찰됐지만 보이는 동의 UI는 감지되지 않았습니다.",
       trackingBeforeClearChoice: "동의 UI가 보이는 상태에서 $1개 추적성 요청, $2개 추적성 쿠키가 함께 관찰됐습니다.",
+      trackingTimingUnknown: "$1개 추적성 요청, $2개 추적성 쿠키가 같은 관찰 구간에 있지만 선택 시각이 없어 동의 전 발생으로 단정할 수 없습니다.",
       trackingDespiteDisabledToggle: "$1개 광고/분석 토글이 꺼져 있지만 추적성 요청 또는 쿠키가 관찰됐습니다.",
+      trackingDisabledTimingUnknown: "$1개 광고/분석 토글이 꺼진 상태와 추적 동작이 함께 관찰됐지만 선택 시각이 없어 거부 후 발생으로 단정할 수 없습니다.",
+      trackingAfterRejection: "거부 선택 이후 $1개 추적성 요청과 $2개 추적성 쿠키가 관찰됐습니다.",
+      trackingAfterRejectionTimingUnknown: "거부 선택과 $1개 추적성 요청, $2개 추적성 쿠키가 같은 관찰 구간에 있지만 발생 순서를 확정할 수 없습니다.",
       noDataFound: "명확히 감지된 개인정보 항목은 적지만, 원문에서 수집 항목 표를 직접 확인해야 합니다.",
       summaryIntro: "위험도는 '$1'으로 보입니다.",
       summaryDataFound: "문서에서 $1 수집 가능성이 확인됩니다.",
@@ -223,6 +254,7 @@ const ANALYZER_TEXT = {
       summaryPositive: "긍정적으로는 $1가 언급됩니다.",
       cookieDefaultEnabledSuffix: " 기본 켜짐.",
       cookieInferredSuffix: " 추정.",
+      syntheticPreferencesLabel: "세부 설정",
       baselineLabel: "기준",
       notDetected: "없음"
     },
@@ -267,7 +299,8 @@ const ANALYZER_TEXT = {
       high: "High",
       medium: "Caution",
       low: "Low",
-      moderate: "Moderate"
+      moderate: "Moderate",
+      unknown: "Unknown"
     },
     dataCategoryLabels: {
       identity: "Identity",
@@ -333,7 +366,15 @@ const ANALYZER_TEXT = {
       analytics: "Analytics/performance cookies",
       advertising: "Advertising/marketing cookies",
       social: "Social/third-party widgets",
-      third_party: "Third-party sharing/partners"
+      third_party: "Third-party sharing/partners",
+      payment: "Payment processing",
+      support: "Customer support",
+      error_monitoring: "Error monitoring",
+      hosting: "Hosting/infrastructure",
+      authentication: "Authentication",
+      security: "Security",
+      cdn_security: "CDN/security",
+      unknown: "Unclassified external service"
     },
     consentCategoryReasons: {
       necessary: "Usually limited to service operation needs such as login, security, and session maintenance.",
@@ -342,7 +383,15 @@ const ANALYZER_TEXT = {
       analytics: "Can measure visits, clicks, and dwell time.",
       advertising: "May be used for ad identification, personalized ads, and cross-site ad network tracking.",
       social: "Social login, share buttons, and external widgets may identify users.",
-      third_party: "Identifiers can be passed to external partners or service providers."
+      third_party: "Identifiers can be passed to external partners or service providers.",
+      payment: "Information may be sent to payment providers for authorization and fraud prevention.",
+      support: "A support provider may process limited information while handling customer inquiries.",
+      error_monitoring: "Error and device information may be processed for incident diagnosis.",
+      hosting: "A hosting provider may process data to operate the service.",
+      authentication: "An identity provider may process information for login and identity verification.",
+      security: "Identifiers may be processed for security checks and abuse prevention.",
+      cdn_security: "Connection information may be processed for content delivery and threat protection.",
+      unknown: "Review the external service's actual processing purpose directly."
     },
     sensitiveFieldLabels: {
       contact: "Contact",
@@ -382,6 +431,7 @@ const ANALYZER_TEXT = {
     },
     finding: {
       noPolicyText: "No text available to analyze.",
+      notPolicyText: "This text cannot be identified reliably as terms or a privacy policy.",
       jurisdiction_uncertain_title: "Jurisdiction could not be determined reliably",
       jurisdiction_uncertain_detail: "Language, timezone, and domain are not sufficient to determine KR/US/GDPR baseline with high confidence.",
       jurisdiction_uncertain_advice: "Allow users to choose the applicable compliance basis manually when needed.",
@@ -419,6 +469,8 @@ const ANALYZER_TEXT = {
       reject_hidden_in_preferences_advice: "Check whether a clear reject/opt-out path is reachable only through settings.",
       tracking_despite_disabled_toggle_title: "Tracking observed while related toggles are off",
       tracking_despite_disabled_toggle_advice: "Reproduce after rejecting to verify SDK/cookies do not continue loading.",
+      tracking_after_rejection_title: "Tracking observed after rejection",
+      tracking_after_rejection_advice: "Verify whether post-rejection requests and cookies are strictly necessary; analytics and advertising trackers should remain blocked until opted in.",
       tracking_after_snapshot_title: "Tracking observed after baseline",
       tracking_after_snapshot_advice: "If baseline was captured after opt-out, verify tracking does not restart.",
       write_request_after_snapshot_title: "Data write request after baseline",
@@ -460,7 +512,6 @@ const ANALYZER_TEXT = {
     findingTemplates: {
       noPolicyText: "No text available to analyze.",
       undisclosedThirdParties: "$1 was requested.",
-      vendorPolicyGap: "$1 has missing policy basis for: $2",
       trackerWithoutDisclosure: "Tracker domains were detected: $1.",
       sensitiveFieldsWithoutCategory: "Observed fields: $1.",
       insecureHttp: "Requests observed on HTTP: $1.",
@@ -475,7 +526,11 @@ const ANALYZER_TEXT = {
       writeRequestAfterSnapshot: "Write request observed from: $1.",
       trackingWithoutVisibleConsent: "$1 tracking requests and $2 tracking cookies were observed before consent UI was visible.",
       trackingBeforeClearChoice: "Tracking was observed while consent UI was visible: $1 requests and $2 tracking cookies.",
+      trackingTimingUnknown: "$1 tracking requests and $2 tracking cookies were in the same observation window, but no choice time was available to prove they occurred before consent.",
       trackingDespiteDisabledToggle: "Tracking request/cookie was observed even with $1 ad/analytics toggles disabled.",
+      trackingDisabledTimingUnknown: "$1 disabled ad/analytics toggles and tracking were observed in the same window, but no choice time was available to prove tracking happened after rejection.",
+      trackingAfterRejection: "After rejection, $1 tracking requests and $2 tracking cookies were observed.",
+      trackingAfterRejectionTimingUnknown: "Rejection and $1 tracking requests and $2 tracking cookies were observed in the same window, but their order could not be established.",
       noDataFound: "No clear personal data category is detected; check a dedicated data collection table in policy text.",
       summaryIntro: "Risk level appears to be '$1'.",
       summaryDataFound: "The document suggests possible collection of: $1.",
@@ -483,6 +538,7 @@ const ANALYZER_TEXT = {
       summaryPositive: "Positives found: $1.",
       cookieDefaultEnabledSuffix: " default on.",
       cookieInferredSuffix: " inferred.",
+      syntheticPreferencesLabel: "Preferences",
       baselineLabel: "Baseline",
       notDetected: "N/A"
     },
@@ -542,7 +598,7 @@ function tA(path, params = [], locale = analyzerLocale()) {
       .reduce((value, key) => (value && Object.prototype.hasOwnProperty.call(value, key) ? value[key] : undefined), data);
 
   const found = lookup(localeData);
-  const template = (typeof found === "string" ? found : undefined) || lookup(fallbackData) || path;
+  const template = (typeof found === "string" ? found : undefined) || lookup(fallbackData) || "";
   return formatTemplate(String(template), params);
 }
 
@@ -613,7 +669,7 @@ function sectionFindingAdvice(id) {
 }
 
 function sectionFindingDetail(id) {
-  return tA(`finding.${id}_detail`) || "";
+  return tA(`finding.${id}_detail`) || sectionFindingAdvice(id);
 }
 
 function alignmentLabel(pattern) {
@@ -691,49 +747,64 @@ const RISK_RULES = [
     id: "policy_change",
     severity: "medium",
     title: "약관 변경 통지 범위가 넓음",
-    patterns: [/change.*terms|modify.*terms|update.*policy/i, /약관.*변경|정책.*변경|개정/],
+    patterns: [
+      /change.{0,160}terms|modify.{0,160}terms|update.{0,160}policy/i,
+      /약관.{0,120}변경|정책.{0,120}변경|개정/
+    ],
     advice: "중요 변경 시 별도 동의 또는 명확한 사전 통지를 제공하는지 확인하세요."
   },
   {
     id: "account_termination",
     severity: "medium",
     title: "계정 제한/해지 재량",
-    patterns: [/terminate|suspend|disable.*account/i, /계정.*(해지|정지|제한)|서비스.*중단/],
+    patterns: [/terminate|suspend|disable.{0,120}account/i, /계정.{0,120}(해지|정지|제한)|서비스.{0,120}중단/],
     advice: "해지 사유, 이의제기 절차, 데이터 백업 가능 여부가 명시되어야 합니다."
   },
   {
     id: "liability_limit",
     severity: "medium",
     title: "책임 제한 조항",
-    patterns: [/limitation of liability|not liable|disclaim/i, /책임.*제한|면책|손해.*책임.*없/],
+    patterns: [/limitation of liability|not liable|disclaim/i, /책임.{0,120}제한|면책|손해.{0,120}책임.{0,80}(?:없|지지\s*않)/],
     advice: "서비스 장애, 데이터 손실, 보안 사고에 대한 책임을 과도하게 배제하는지 살펴보세요."
   },
   {
     id: "retention_unclear",
     severity: "medium",
     title: "보유 기간이 불명확할 수 있음",
-    patterns: [/as long as necessary|retain.*necessary|indefinitely/i, /필요한 기간|목적 달성.*후|관계 법령.*보관/],
+    patterns: [
+      /as long as necessary|retain.{0,160}necessary|indefinitely/i,
+      /필요한 기간|필요한 동안|무기한|관계 법령.{0,120}보관/
+    ],
     advice: "각 데이터 항목별 보유 기간과 삭제 시점이 분리되어 있는지 확인하세요."
   },
   {
     id: "overseas_transfer",
     severity: "medium",
     title: "국외 이전 가능성",
-    patterns: [/international transfer|outside your country|cross-border/i, /국외 이전|해외 이전|국외.*보관|해외.*보관/],
+    patterns: [
+      /international transfer|outside your country|cross-border/i,
+      /국외 이전|해외 이전|국외.{0,120}보관|해외.{0,120}보관/
+    ],
     advice: "이전 국가, 수탁자, 이전 항목, 보유 기간, 거부권 안내가 있는지 확인하세요."
   },
   {
     id: "arbitration",
     severity: "high",
     title: "분쟁 해결 권리 제한 가능성",
-    patterns: [/binding arbitration|class action waiver|waive.*jury/i, /중재|집단소송.*포기|관할 법원/],
+    patterns: [
+      /binding arbitration|class action waiver|waive.{0,120}jury/i,
+      /(?:강제|의무|구속력|전속).{0,20}중재|중재.{0,30}(?:강제|의무|구속력|전속)|집단소송.{0,120}포기|전속.{0,20}관할|관할 법원.{0,30}(?:전속|지정|한정)/
+    ],
     advice: "소송권, 집단구제, 관할지가 사용자에게 불리하게 제한되는지 확인하세요."
   },
   {
     id: "security_vague",
     severity: "low",
     title: "보안 조치 설명이 추상적",
-    patterns: [/reasonable security|appropriate safeguards|industry standard/i, /합리적인 보안|적절한 보호|기술적.*관리적.*조치/],
+    patterns: [
+      /reasonable security|appropriate safeguards|industry standard/i,
+      /합리적인 보안|적절한 보호|기술적.{0,120}관리적.{0,120}조치/
+    ],
     advice: "암호화, 접근통제, 침해 통지, 로그 관리 등 구체적인 조치가 있는지 보세요."
   },
   {
@@ -749,26 +820,42 @@ const POSITIVE_RULES = [
   {
     id: "delete_right",
     title: "삭제/탈퇴 권리 안내",
-    patterns: [/delete.*account|right to erasure|withdraw consent/i, /회원탈퇴|삭제 요청|동의 철회|처리정지/]
+    patterns: [/delete.{0,120}account|right to erasure|withdraw consent/i, /회원탈퇴|삭제 요청|동의 철회|처리정지/]
   },
   {
     id: "security_controls",
     title: "보안 조치 언급",
-    patterns: [/encrypt|encryption|access control|breach notification/i, /암호화|접근통제|침해.*통지|보안.*교육/]
+    patterns: [/encrypt|encryption|access control|breach notification/i, /암호화|접근통제|침해.{0,80}통지|보안.{0,80}교육/]
   },
   {
     id: "retention_policy",
     title: "데이터 보유 기간 안내",
-    patterns: [/retention period|retain for|stored for/i, /보유 기간|파기|삭제.*기간/]
+    patterns: [/retention period|retain for|stored for/i, /보유 기간|파기|삭제.{0,80}기간/]
   }
 ];
 
-const TRACKER_PATTERNS = [
-  /google-analytics\.com|googletagmanager\.com|doubleclick\.net|googleadservices\.com/i,
-  /facebook\.com|connect\.facebook\.net|meta\.com/i,
-  /hotjar\.com|mixpanel\.com|segment\.com|amplitude\.com|fullstory\.com/i,
-  /adservice|analytics|tracking|tracker|pixel|collect/i
+const KNOWN_TRACKER_DOMAINS = [
+  "google-analytics.com",
+  "analytics.google.com",
+  "googletagmanager.com",
+  "doubleclick.net",
+  "googleadservices.com",
+  "googlesyndication.com",
+  "facebook.com",
+  "facebook.net",
+  "connect.facebook.net",
+  "meta.com",
+  "hotjar.com",
+  "hotjar.io",
+  "mixpanel.com",
+  "segment.com",
+  "segment.io",
+  "amplitude.com",
+  "fullstory.com"
 ];
+const GENERIC_TRACKER_TOKENS = new Set(["adservice", "analytics", "tracking", "tracker", "pixel", "collect"]);
+
+const CONSENT_BOUNDARY_AMBIGUITY_MS = 1000;
 
 const CONSENT_CATEGORY_RULES = [
   {
@@ -823,38 +910,65 @@ const CONSENT_CATEGORY_RULES = [
 ];
 
 const SENSITIVE_FIELD_RULES = [
-  { category: "contact", label: "연락처", patterns: [/email|e-mail|phone|tel|mobile|address/i, /이메일|전화|주소/] },
-  { category: "identity", label: "신원 정보", patterns: [/name|birth|birthday|gender|age/i, /이름|생년|성별|나이/] },
-  { category: "account", label: "계정 정보", patterns: [/user(name)?|login|password|passwd|pwd|profile|account/i, /아이디|비밀번호|계정|프로필/] },
-  { category: "payment", label: "결제 정보", patterns: [/card|payment|billing|bank|account_number/i, /카드|결제|청구|계좌/] },
-  { category: "location", label: "위치 정보", patterns: [/lat|lng|lon|location|geo|gps/i, /위치|좌표/] },
-  { category: "device", label: "기기 및 접속 정보", patterns: [/ip|device|cookie|session|token|uuid|gaid|idfa/i, /기기|쿠키|세션|토큰/] }
+  {
+    category: "contact",
+    patterns: [/\b(?:email|emailaddress|e mail|phone|phonenumber|telephone|tel|mobile|address)\b/i, /이메일|전화|주소/]
+  },
+  {
+    category: "identity",
+    patterns: [/\b(?:name|fullname|firstname|lastname|birth|dateofbirth|birthday|gender|age)\b/i, /이름|생년|성별|나이/]
+  },
+  {
+    category: "account",
+    patterns: [/\b(?:user|username|login|password|passwd|pwd|profile|account)\b(?!\s+number\b)/i, /아이디|비밀번호|계정|프로필/]
+  },
+  {
+    category: "payment",
+    patterns: [/\b(?:card|cardnumber|payment|billing|bank|account number|accountnumber)\b/i, /카드|결제|청구|계좌/]
+  },
+  {
+    category: "location",
+    patterns: [/\b(?:lat|latitude|lng|lon|longitude|location|geo|gps)\b/i, /위치|좌표/]
+  },
+  {
+    category: "device",
+    patterns: [/\b(?:ip|ipaddress|device|cookie|session|token|uuid|gaid|idfa)\b/i, /기기|쿠키|세션|토큰/]
+  }
 ];
 
 const POLICY_SECTION_RULES = [
   {
     id: "collected_data",
     label: "수집 항목",
-    headingPatterns: [/collect(ed|ion)?|personal information we collect|information you provide/i, /수집.*항목|처리.*항목|개인정보.*수집|수집하는.*정보/],
+    headingPatterns: [
+      /collect(ed|ion)?|personal information we collect|information you provide/i,
+      /수집.{0,100}항목|처리.{0,100}항목|개인정보.{0,100}수집|수집하는.{0,100}정보/
+    ],
     contentPatterns: [/name|email|phone|address|payment|cookie|device|location/i, /이름|이메일|전화|주소|결제|쿠키|기기|위치/]
   },
   {
     id: "purpose",
     label: "수집 목적",
-    headingPatterns: [/purpose|use of information|how we use/i, /수집.*목적|이용.*목적|처리.*목적/],
+    headingPatterns: [/purpose|use of information|how we use/i, /수집.{0,100}목적|이용.{0,100}목적|처리.{0,100}목적/],
     contentPatterns: [/provide|service|account|support|advertis|analytics|marketing/i, /서비스|회원|본인확인|고객지원|광고|분석|마케팅/]
   },
   {
     id: "legal_basis",
     label: "처리 법적 근거",
-    headingPatterns: [/legal basis|lawful basis|grounds for processing|basis for processing/i, /법적.*근거|처리.*근거|적법.*근거/],
-    contentPatterns: [/consent|contract|legal obligation|legitimate interest|public interest|vital interest/i, /동의|계약|법적 의무|정당한 이익|공익|생명.*이익/]
+    headingPatterns: [
+      /legal basis|lawful basis|grounds for processing|basis for processing/i,
+      /법적.{0,100}근거|처리.{0,100}근거|적법.{0,100}근거/
+    ],
+    contentPatterns: [
+      /consent|contract|legal obligation|legitimate interest|public interest|vital interest/i,
+      /동의|계약|법적 의무|정당한 이익|공익|생명.{0,100}이익/
+    ]
   },
   {
     id: "retention",
     label: "보유 기간",
-    headingPatterns: [/retention|retain|storage period|delete/i, /보유.*기간|이용.*기간|파기|삭제/],
-    contentPatterns: [/retain|delete|erase|as long as|period|year|month/i, /보유|파기|삭제|기간|년|개월|목적.*달성/]
+    headingPatterns: [/retention|retain|storage period|delete/i, /보유.{0,100}기간|이용.{0,100}기간|파기|삭제/],
+    contentPatterns: [/retain|delete|erase|as long as|period|year|month/i, /보유|파기|삭제|기간|년|개월|목적.{0,100}달성/]
   },
   {
     id: "third_party",
@@ -871,31 +985,37 @@ const POLICY_SECTION_RULES = [
   {
     id: "overseas_transfer",
     label: "국외 이전",
-    headingPatterns: [/international transfer|cross-border|outside/i, /국외.*이전|해외.*이전|국외.*보관|해외.*보관/],
-    contentPatterns: [/international|country|outside|cross-border/i, /국외|해외|이전.*국가|보관.*국가/]
+    headingPatterns: [
+      /international transfer|cross-border|outside/i,
+      /국외.{0,100}이전|해외.{0,100}이전|국외.{0,100}보관|해외.{0,100}보관/
+    ],
+    contentPatterns: [/international|country|outside|cross-border/i, /국외|해외|이전.{0,100}국가|보관.{0,100}국가/]
   },
   {
     id: "automated_decision",
     label: "자동화 의사결정/프로파일링",
-    headingPatterns: [/automated decision|profiling|profile/i, /자동화.*의사결정|프로파일링|프로파일/],
-    contentPatterns: [/automated|profiling|logic involved|significant effect/i, /자동화|프로파일링|로직|중대한.*영향/]
+    headingPatterns: [/automated decision|profiling|profile/i, /자동화.{0,100}의사결정|프로파일링|프로파일/],
+    contentPatterns: [/automated|profiling|logic involved|significant effect/i, /자동화|프로파일링|로직|중대한.{0,100}영향/]
   },
   {
     id: "cookies_tracking",
     label: "쿠키/행태정보",
-    headingPatterns: [/cookie|tracking|advertis|analytics/i, /쿠키|행태정보|맞춤형.*광고|추적|광고|분석/],
+    headingPatterns: [/cookie|tracking|advertis|analytics/i, /쿠키|행태정보|맞춤형.{0,100}광고|추적|광고|분석/],
     contentPatterns: [/cookie|tracking|pixel|advertis|analytics|opt out/i, /쿠키|행태정보|추적|광고|분석|거부|동의/]
   },
   {
     id: "user_rights",
     label: "이용자 권리",
-    headingPatterns: [/your rights|access|deletion|withdraw|choice/i, /이용자.*권리|정보주체.*권리|열람|정정|삭제|동의.*철회|처리정지/],
-    contentPatterns: [/access|delete|correct|withdraw|opt out|request/i, /열람|정정|삭제|동의.*철회|처리정지|요청/]
+    headingPatterns: [
+      /your rights|access|deletion|withdraw|choice/i,
+      /이용자.{0,100}권리|정보주체.{0,100}권리|열람|정정|삭제|동의.{0,100}철회|처리정지/
+    ],
+    contentPatterns: [/access|delete|correct|withdraw|opt out|request/i, /열람|정정|삭제|동의.{0,100}철회|처리정지|요청/]
   },
   {
     id: "security",
     label: "보안 조치",
-    headingPatterns: [/security|safeguard|protect/i, /보안|보호.*조치|안전성.*확보|기술적.*관리적/],
+    headingPatterns: [/security|safeguard|protect/i, /보안|보호.{0,100}조치|안전성.{0,100}확보|기술적.{0,100}관리적/],
     contentPatterns: [/encrypt|access control|security|breach|safeguard/i, /암호화|접근통제|보안|침해|보호조치/]
   },
   {
@@ -969,11 +1089,100 @@ const EU_COUNTRY_CODES = new Set([
   "NO"
 ]);
 
+const US_TIME_ZONES = new Set([
+  "america/adak",
+  "america/anchorage",
+  "america/boise",
+  "america/chicago",
+  "america/denver",
+  "america/detroit",
+  "america/juneau",
+  "america/los_angeles",
+  "america/menominee",
+  "america/metlakatla",
+  "america/new_york",
+  "america/nome",
+  "america/phoenix",
+  "america/sitka",
+  "america/yakutat",
+  "pacific/honolulu"
+]);
+
+const EU_EEA_TIME_ZONES = new Set([
+  "asia/nicosia",
+  "atlantic/reykjavik",
+  "europe/amsterdam",
+  "europe/athens",
+  "europe/berlin",
+  "europe/bratislava",
+  "europe/brussels",
+  "europe/bucharest",
+  "europe/budapest",
+  "europe/copenhagen",
+  "europe/dublin",
+  "europe/helsinki",
+  "europe/lisbon",
+  "europe/ljubljana",
+  "europe/luxembourg",
+  "europe/madrid",
+  "europe/malta",
+  "europe/mariehamn",
+  "europe/oslo",
+  "europe/paris",
+  "europe/prague",
+  "europe/riga",
+  "europe/rome",
+  "europe/sofia",
+  "europe/stockholm",
+  "europe/tallinn",
+  "europe/vaduz",
+  "europe/vienna",
+  "europe/vilnius",
+  "europe/warsaw",
+  "europe/zagreb"
+]);
+
+function isUsTimeZone(timeZone) {
+  return (
+    US_TIME_ZONES.has(timeZone) ||
+    timeZone.startsWith("america/indiana/") ||
+    timeZone.startsWith("america/kentucky/") ||
+    timeZone.startsWith("america/north_dakota/")
+  );
+}
+
+function isEuEeaTimeZone(timeZone) {
+  return EU_EEA_TIME_ZONES.has(timeZone);
+}
+
+function boundedPolicyText(value) {
+  return String(value || "").slice(0, MAX_POLICY_ANALYSIS_CHARS);
+}
+
+function chunkAnalysisSentence(sentence) {
+  if (sentence.length <= MAX_ANALYSIS_SENTENCE_CHARS) return [sentence];
+
+  const chunks = [];
+  const step = MAX_ANALYSIS_SENTENCE_CHARS - ANALYSIS_SENTENCE_OVERLAP_CHARS;
+  for (let offset = 0; offset < sentence.length; offset += step) {
+    chunks.push(sentence.slice(offset, offset + MAX_ANALYSIS_SENTENCE_CHARS));
+    if (offset + MAX_ANALYSIS_SENTENCE_CHARS >= sentence.length) break;
+  }
+  return chunks;
+}
+
 function getSentences(text) {
-  return text
-    .replace(/\s+/g, " ")
-    .split(/(?<=[.!?。！？])\s+|(?<=다\.)\s+|(?<=요\.)\s+/)
+  return boundedPolicyText(text)
+    .replace(/\r/g, "")
+    .split(/\n{2,}/)
+    .flatMap((paragraph) =>
+      paragraph
+        .replace(/\n+/g, " ")
+        .replace(/[ \t]+/g, " ")
+        .split(/(?<=[.!?。！？])\s+|(?<=다\.)\s+|(?<=요\.)\s+/)
+    )
     .map((sentence) => sentence.trim())
+    .flatMap(chunkAnalysisSentence)
     .filter(Boolean);
 }
 
@@ -981,20 +1190,417 @@ function includesAny(text, patterns) {
   return patterns.some((pattern) => pattern.test(text));
 }
 
-function getEvidence(sentences, patterns) {
-  const hit = sentences.find((sentence) => includesAny(sentence, patterns));
-  if (!hit) return "";
-  return hit.length > 220 ? `${hit.slice(0, 217)}...` : hit;
+function normalizedRequestHost(request) {
+  const explicitHost = String(request?.host || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^\.+|\.+$/g, "");
+  if (explicitHost) return explicitHost;
+
+  try {
+    return new URL(String(request?.url || "")).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function requestPathTokens(request) {
+  let path = "";
+  try {
+    path = new URL(String(request?.url || "")).pathname;
+  } catch {
+    path = String(request?.url || "");
+  }
+  return path
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function isTrackerRequest(request) {
+  const host = normalizedRequestHost(request);
+  if (KNOWN_TRACKER_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`))) return true;
+  if (host.split(".").some((label) => GENERIC_TRACKER_TOKENS.has(label))) return true;
+  return requestPathTokens(request).some((token) => GENERIC_TRACKER_TOKENS.has(token));
+}
+
+function isTrackingCookieName(value) {
+  const name = String(value || "").toLowerCase();
+  return /^(?:_?ga(?:_[a-z0-9_-]{1,128})?|_?gid|_?gat(?:_[a-z0-9_-]{1,128})?|_?gac(?:_[a-z0-9_-]{1,128})?|_?fbp|_?fbc|_?gcl(?:_[a-z0-9_-]{1,128})?|__utm[a-z]+|amp_token|ajs(?:_[a-z0-9_-]{1,128})?|amplitude(?:_[a-z0-9_-]{1,128})?|mixpanel(?:_[a-z0-9_-]{1,128})?|mp_[a-z0-9_-]{1,128}_mixpanel|visitor(?:_[a-z0-9_-]{1,128})?|track(?:er|ing)?(?:_[a-z0-9_-]{1,128})?)$/.test(
+    name
+  );
+}
+
+function normalizeMatchTokens(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[^a-z0-9가-힣]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function includesDataExample(normalizedText, example) {
+  const normalizedExample = normalizeMatchTokens(example);
+  if (!normalizedExample) return false;
+  if (/[가-힣]/.test(normalizedExample)) return normalizedText.includes(normalizedExample);
+
+  const searchableText = normalizedExample === "address"
+    ? normalizedText.replace(/\bip address(?:es)?\b/g, "")
+    : normalizedText;
+  const words = normalizedExample.split(" ");
+  const lastWord = words.at(-1);
+  const pluralLastWord = /[^aeiou]y$/.test(lastWord)
+    ? `${lastWord.slice(0, -1)}ies`
+    : /(?:s|x|z|ch|sh)$/.test(lastWord)
+      ? `${lastWord}es`
+      : `${lastWord}s`;
+  const pluralExample = [...words.slice(0, -1), pluralLastWord].join(" ");
+  const paddedText = ` ${searchableText} `;
+  return paddedText.includes(` ${normalizedExample} `) || paddedText.includes(` ${pluralExample} `);
+}
+
+function matchesSensitiveValue(value, patterns) {
+  const normalized = normalizeMatchTokens(value);
+  return Boolean(normalized && patterns.some((pattern) => pattern.test(normalized)));
+}
+
+const BROAD_SHARING_TARGET_PATTERN = /\bthird[- ]part(?:y|ies)\b|\b(?:business )?partners?\b|\baffiliates?\b|제3자|제삼자|협력사|제휴사|외부\s*사업자/i;
+const BROAD_SHARING_ACTION_PATTERN = /\b(?:share|sell|transfer|disclos(?:e|es|ed|ing))\b|공유|판매|이전/i;
+const DATA_PROVISION_PATTERN = /\bprovid(?:e|es|ed|ing)\b.{0,80}\b(?:personal\s+)?(?:data|information)\b|\b(?:personal\s+)?(?:data|information)\b.{0,80}\bprovid(?:e|es|ed|ing)\b|(?:개인정보|개인\s*정보|데이터|수집\s*정보).{0,80}제공|제공.{0,80}(?:개인정보|개인\s*정보|데이터|수집\s*정보)/i;
+const CHILD_REFERENCE_PATTERN = /\bchildren?\b|\bminors?\b|\bunder\s+(?:13|14|16)\b|아동|청소년|미성년자|만\s*(?:13|14|16)세/i;
+const CHILD_DATA_ACTION_PATTERN = /\b(?:collect|process|use|share|sell|transfer|store|retain)\b|수집|처리|이용|사용|공유|판매|이전|보유|저장/i;
+
+function splitRiskClauses(sentence) {
+  const coordinatedPredicates = sentence
+    .replace(
+      /\b(?:and|while|whereas)\s+(?=(?:(?:we|you|they|the (?:company|service)|our (?:company|service))\b|(?:may|might|can|could|will|would|shall)\b))/gi,
+      "; "
+    )
+    .replace(/((?:않|아니)(?:으며|지만|으나|고))\s*/g, "$1; ");
+
+  return coordinatedPredicates
+    .split(/\s*(?:;|\bbut\b|\bhowever\b|\bexcept that\b|하지만|그러나|다만)\s*/i)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+}
+
+function hasNegatedDataAction(clause) {
+  return (
+    /\b(?:do|does|did|will|would|shall|may|might|can|could)\s+not\b[^.;]{0,60}\b(?:collect|process|use|share|sell|transfer|disclose|provide|store|retain)\b/i.test(clause) ||
+    /\b(?:don't|doesn't|didn't|won't|wouldn't|can't|cannot|never)\b[^.;]{0,60}\b(?:collect|process|use|share|sell|transfer|disclose|provide|store|retain)\b/i.test(clause) ||
+    /\b(?:is|are|be|been|will be)\s+not\s+(?:collected|processed|used|shared|sold|transferred|disclosed|provided|stored|retained)\b/i.test(clause) ||
+    /\b(?:collect|process|use|share|sell|transfer|disclose|provide|store|retain)s?\s+no\b/i.test(clause) ||
+    /\bno\s+(?:sale|sharing|transfer|disclosure|collection|processing)\b/i.test(clause) ||
+    /(?:수집|처리|이용|사용|공유|판매|이전|제공|보유|저장)(?:하|되)?지\s*(?:않|아니)/.test(clause) ||
+    /(?:수집|처리|이용|사용|공유|판매|이전|제공|보유|저장)하지\s*(?:않|아니)/.test(clause) ||
+    /(?:수집|처리|이용|사용|공유|판매|이전|제공|보유|저장)\s*(?:없|금지)/.test(clause)
+  );
+}
+
+function matchesBroadSharingSentence(sentence) {
+  return splitRiskClauses(sentence).some((clause) => {
+    if (!BROAD_SHARING_TARGET_PATTERN.test(clause) || hasNegatedDataAction(clause)) return false;
+    return BROAD_SHARING_ACTION_PATTERN.test(clause) || DATA_PROVISION_PATTERN.test(clause);
+  });
+}
+
+function matchesChildrenRiskSentence(sentence) {
+  return splitRiskClauses(sentence).some(
+    (clause) => CHILD_REFERENCE_PATTERN.test(clause) && CHILD_DATA_ACTION_PATTERN.test(clause) && !hasNegatedDataAction(clause)
+  );
+}
+
+function hasNegatedAdvertisingAction(clause) {
+  return (
+    hasNegatedDataAction(clause) ||
+    /\b(?:do|does|did|will|would|shall|may|might|can|could)\s+not\b[^.;]{0,80}\b(?:serve|show|deliver|target|track|profile|advertis)/i.test(
+      clause
+    ) ||
+    /\b(?:don't|doesn't|didn't|won't|wouldn't|can't|cannot|never)\b[^.;]{0,80}\b(?:serve|show|deliver|target|track|profile|advertis)/i.test(
+      clause
+    ) ||
+    /\b(?:never|without)\b[^.;]{0,80}\b(?:targeting|tracking|profiling|advertising)\b/i.test(clause) ||
+    /(?:맞춤형\s*광고|타겟팅|리타겟팅|행태정보|추적)(?:을|를)?\s*(?:사용|제공|수행|활용)?(?:하|되)?지\s*(?:않|아니)/.test(
+      clause
+    )
+  );
+}
+
+function matchesBehavioralAdsSentence(sentence, rule) {
+  return splitRiskClauses(sentence).some(
+    (clause) => includesAny(clause, rule.patterns) && !hasNegatedAdvertisingAction(clause)
+  );
+}
+
+function matchesAccountTerminationSentence(sentence, rule) {
+  return splitRiskClauses(sentence).some((clause) => {
+    const negatedTermination =
+      /\b(?:do|does|did|will|would|shall|may|might|can|could)\s+not\b[^.;]{0,80}\b(?:terminate|suspend|disable|restrict|close)\b/i.test(
+        clause
+      ) ||
+      /\b(?:don't|doesn't|didn't|won't|wouldn't|can't|cannot|never)\b[^.;]{0,80}\b(?:terminate|suspend|disable|restrict|close)\b/i.test(
+        clause
+      ) ||
+      /\b(?:account|access|service)\b[^.;]{0,50}\b(?:will|may|can)?\s*not\s+be\s*(?:terminated|suspended|disabled|restricted|closed)\b/i.test(
+        clause
+      ) ||
+      /(?:해지|정지|제한|중단|종료)(?:하|되)?지\s*(?:않|아니)/.test(clause);
+    if (!includesAny(clause, rule.patterns) || hasNegatedDataAction(clause) || negatedTermination) return false;
+
+    const providerInitiated =
+      /\b(?:we|the (?:company|service|provider|operator)|our (?:company|service))\b[^.;]{0,80}\b(?:terminate|suspend|disable|restrict|close)\b/i.test(
+        clause
+      ) ||
+      /\b(?:your\s+)?(?:account|access|service)\b[^.;]{0,50}\b(?:may|can|will)?\s*be\s*(?:terminated|suspended|disabled|restricted|closed)\b/i.test(
+        clause
+      ) ||
+      /(?:회사|운영자|사업자)(?:는|가|은|이)?.{0,80}(?:계정|서비스|이용).{0,40}(?:해지|정지|제한|중단)|서비스(?:는|가|에서).{0,80}(?:계정|이용).{0,40}(?:해지|정지|제한|중단)/.test(
+        clause
+      );
+    if (providerInitiated) return true;
+
+    const userInitiated =
+      /\b(?:you|users?|customers?|members?)\b(?:(?!\b(?:we|the (?:company|service|provider|operator)|our (?:company|service))\b)[^.;]){0,60}\b(?:may|can|could|are (?:free|entitled) to)?\s*(?:terminate|close|delete|cancel)\b/i.test(
+        clause
+      ) ||
+      /(?:이용자|사용자|회원|고객)(?:(?!(?:회사|운영자|사업자|서비스(?:는|가|에서))).){0,60}(?:계정|서비스|이용)?.{0,30}(?:탈퇴|해지|삭제|종료)(?:할\s*수|가능)/.test(
+        clause
+      );
+    if (userInitiated) return false;
+    return false;
+  });
+}
+
+function matchesPolicyChangeSentence(sentence, rule) {
+  return splitRiskClauses(sentence).some((clause) => {
+    if (!includesAny(clause, rule.patterns)) return false;
+    return !(
+      /\b(?:do|does|did|will|would|shall|may|might|can|could)\s+not\b[^.;]{0,80}\b(?:change|modify|update|revise)\b/i.test(
+        clause
+      ) ||
+      /\b(?:never|won't|wouldn't|cannot|can't)\b[^.;]{0,80}\b(?:change|modify|update|revise)\b/i.test(clause) ||
+      /(?:약관|정책)(?:을|를)?[^.;]{0,40}(?:변경|개정)(?:하|되)?지\s*(?:않|아니)/.test(clause)
+    );
+  });
+}
+
+function matchesRetentionRiskSentence(sentence, rule) {
+  return splitRiskClauses(sentence).some((clause) => {
+    if (!includesAny(clause, rule.patterns) || hasNegatedDataAction(clause)) return false;
+    const explicitDuration =
+      /\b\d+\s*(?:business\s+)?(?:days?|weeks?|months?|years?)\b/i.test(clause) ||
+      /\d+\s*(?:일|주|개월|달|년)/.test(clause);
+    return !explicitDuration;
+  });
+}
+
+function matchesOverseasTransferSentence(sentence, rule) {
+  return splitRiskClauses(sentence).some(
+    (clause) => includesAny(clause, rule.patterns) && !hasNegatedDataAction(clause)
+  );
+}
+
+function matchesArbitrationSentence(sentence, rule) {
+  return splitRiskClauses(sentence).some((clause) => {
+    if (!includesAny(clause, rule.patterns)) return false;
+    return !(
+      /\b(?:do|does|did|will|would|shall|may|might|can|could)\s+not\b[^.;]{0,80}\b(?:require|impose|use|enforce)\b[^.;]{0,40}\barbitration\b/i.test(
+        clause
+      ) ||
+      /\b(?:no|without)\s+(?:mandatory|binding)\s+arbitration\b/i.test(clause) ||
+      /\barbitration\b[^.;]{0,50}\b(?:is|will be)\s+not\s+(?:mandatory|required|binding)\b/i.test(clause) ||
+      /(?:중재|집단소송\s*포기|전속\s*관할)(?:를|을)?[^.;]{0,50}(?:요구|강제|적용|지정)(?:하|되)?지\s*(?:않|아니)/.test(
+        clause
+      )
+    );
+  });
+}
+
+const CONCRETE_SECURITY_CONTROL_PATTERN =
+  /encrypt|encryption|access control|multi-factor|two-factor|penetration test|security audit|breach notification|암호화|접근통제|다중\s*인증|이중\s*인증|침투\s*테스트|보안\s*감사|침해.{0,12}통지/i;
+
+function contextualRiskSentenceMatcher(rule) {
+  if (rule.id === "broad_data_sharing") return matchesBroadSharingSentence;
+  if (rule.id === "children") return matchesChildrenRiskSentence;
+  if (rule.id === "behavioral_ads") return (sentence) => matchesBehavioralAdsSentence(sentence, rule);
+  if (rule.id === "account_termination") return (sentence) => matchesAccountTerminationSentence(sentence, rule);
+  if (rule.id === "policy_change") return (sentence) => matchesPolicyChangeSentence(sentence, rule);
+  if (rule.id === "retention_unclear") return (sentence) => matchesRetentionRiskSentence(sentence, rule);
+  if (rule.id === "overseas_transfer") return (sentence) => matchesOverseasTransferSentence(sentence, rule);
+  if (rule.id === "arbitration") return (sentence) => matchesArbitrationSentence(sentence, rule);
+  return null;
+}
+
+function matchesRiskRule(rule, text, sentences) {
+  if (rule.id === "security_vague") {
+    return includesAny(text, rule.patterns) && !CONCRETE_SECURITY_CONTROL_PATTERN.test(text);
+  }
+  const matcher = contextualRiskSentenceMatcher(rule);
+  if (matcher) return sentences.some(matcher);
+  return includesAny(text, rule.patterns);
+}
+
+function getRiskEvidence(rule, sentences) {
+  if (rule.id === "security_vague") {
+    const hit = sentences.find((sentence) => includesAny(sentence, rule.patterns));
+    return hit ? truncateText(hit, 220) : "";
+  }
+  const matcher = contextualRiskSentenceMatcher(rule);
+  const hit = matcher
+    ? sentences.find(matcher)
+    : sentences.find((sentence) => includesAny(sentence, rule.patterns));
+  return hit ? truncateText(hit, 220) : "";
+}
+
+const PRIVACY_DOCUMENT_MARKER_PATTERN = /privacy policy|privacy notice|cookie policy|data protection notice|개인정보\s*처리방침|개인정보\s*보호정책/i;
+const TERMS_DOCUMENT_MARKER_PATTERN = /terms (?:of use|of service|and conditions)|user agreement|이용약관|서비스\s*약관/i;
+const POLICY_DOCUMENT_MARKER_PATTERN = new RegExp(
+  `${PRIVACY_DOCUMENT_MARKER_PATTERN.source}|${TERMS_DOCUMENT_MARKER_PATTERN.source}`,
+  "i"
+);
+const POLICY_DOCUMENT_MARKER_GLOBAL_PATTERN = new RegExp(
+  POLICY_DOCUMENT_MARKER_PATTERN.source,
+  "gi"
+);
+const POLICY_CONTROLLER_SOURCE = String.raw`(?:we|the company|our company|the provider|service provider|our organization|the organization|the operator|data controller)`;
+const POLICY_ACTION_MODIFIER_SOURCE = String.raw`(?:(?:may|might|can|could|will|would|shall|do|does|did|not|also|knowingly|automatically|generally|sometimes)\s+){0,5}`;
+const POLICY_CORE_DATA_ACTION_SOURCE = String.raw`(?:collect(?:s|ed|ing)?|process(?:es|ed|ing)?|retain(?:s|ed|ing)?|store[sd]?|storing|delete[sd]?|deleting)`;
+const POLICY_TRANSFER_DATA_ACTION_SOURCE = String.raw`(?:share[sd]?|sharing|sell(?:s|ing)?|sold)`;
+const POLICY_USE_DATA_ACTION_SOURCE = String.raw`(?:use[sd]?|using)`;
+const POLICY_PERSONAL_DATA_OBJECT_SOURCE = String.raw`(?:personal (?:data|information)|(?:your|user|customer|account) (?:data|information)|(?:data|information) (?:about|from|provided by) you|ip address|device identifier)`;
+const POLICY_CONCRETE_DATA_OBJECT_SOURCE = String.raw`(?:your name|name|email(?: address)?|phone(?: number)?|cookies?|location|payment information)`;
+const POLICY_SPECIFIC_DATA_OBJECT_SOURCE = `(?:${POLICY_PERSONAL_DATA_OBJECT_SOURCE}|${POLICY_CONCRETE_DATA_OBJECT_SOURCE})`;
+const POLICY_GENERIC_DATA_OBJECT_SOURCE = String.raw`(?:information|data)`;
+const POLICY_USER_NEXUS_PATTERN = /\b(?:(?:data|information) (?:about|from|provided by) you|when you (?:(?:create|register) (?:an? |your )?account|sign up|submit (?:a form|personal (?:data|information)|your (?:data|information)))|your account)\b/i;
+const POLICY_EXPOSITORY_FRAME_PATTERN = /^\s*(?:(?:this|the|our|a|an)\s+(?:article|guide|overview|tutorial|report|study|page|news(?: story)?)\s+(?:(?:explains?|compares?|discusses?|describes?|shows?|teaches?|reviews?)\b|on how\b)|learn how\b)/i;
+const POLICY_IMPERATIVE_DATA_ACTION_PATTERN = /^\s*(?:collect|process|retain|store|delete|share|sell|use)\b/i;
+const POLICY_ACCOUNT_HELP_PATTERN = /^\s*(?:(?:to|how to)\s+(?:access|correct|delete|erase|remove|close|suspend|update)|(?:accessing|correcting|deleting|erasing|removing|closing|suspending|updating)\b|click\b.{0,60}\b(?:access|correct|delete|erase|remove|close|suspend|update)\b).{0,160}\b(?:your )?account (?:data|information)\b/i;
+const POLICY_CONTROLLER_SPECIFIC_PRACTICE_PATTERN = new RegExp(
+  String.raw`\b${POLICY_CONTROLLER_SOURCE}\b\s+${POLICY_ACTION_MODIFIER_SOURCE}(?:${POLICY_CORE_DATA_ACTION_SOURCE}|${POLICY_TRANSFER_DATA_ACTION_SOURCE}|${POLICY_USE_DATA_ACTION_SOURCE})\b.{0,120}\b${POLICY_SPECIFIC_DATA_OBJECT_SOURCE}\b|\b${POLICY_SPECIFIC_DATA_OBJECT_SOURCE}\b.{0,120}\b${POLICY_CONTROLLER_SOURCE}\b\s+${POLICY_ACTION_MODIFIER_SOURCE}(?:${POLICY_CORE_DATA_ACTION_SOURCE}|${POLICY_TRANSFER_DATA_ACTION_SOURCE}|${POLICY_USE_DATA_ACTION_SOURCE})\b`,
+  "i"
+);
+const POLICY_CONTROLLER_GENERIC_PRACTICE_PATTERN = new RegExp(
+  String.raw`\b${POLICY_CONTROLLER_SOURCE}\b\s+${POLICY_ACTION_MODIFIER_SOURCE}(?:${POLICY_CORE_DATA_ACTION_SOURCE}|${POLICY_TRANSFER_DATA_ACTION_SOURCE})\b.{0,120}\b${POLICY_GENERIC_DATA_OBJECT_SOURCE}\b|\b${POLICY_GENERIC_DATA_OBJECT_SOURCE}\b.{0,120}\b${POLICY_CONTROLLER_SOURCE}\b\s+${POLICY_ACTION_MODIFIER_SOURCE}(?:${POLICY_CORE_DATA_ACTION_SOURCE}|${POLICY_TRANSFER_DATA_ACTION_SOURCE})\b`,
+  "i"
+);
+const POLICY_DIRECT_SPECIFIC_PRACTICE_PATTERN = new RegExp(
+  String.raw`\b(?:${POLICY_CORE_DATA_ACTION_SOURCE}|${POLICY_TRANSFER_DATA_ACTION_SOURCE}|${POLICY_USE_DATA_ACTION_SOURCE})\b.{0,120}\b${POLICY_PERSONAL_DATA_OBJECT_SOURCE}\b|\b${POLICY_PERSONAL_DATA_OBJECT_SOURCE}\b.{0,120}\b(?:is|are|may be|might be|can be|will be)?\s*(?:collected|processed|used|shared|sold|retained|stored|deleted)\b`,
+  "i"
+);
+const POLICY_DIRECT_CONCRETE_PRACTICE_PATTERN = new RegExp(
+  String.raw`\b(?:${POLICY_CORE_DATA_ACTION_SOURCE}|${POLICY_TRANSFER_DATA_ACTION_SOURCE})\b.{0,120}\b${POLICY_CONCRETE_DATA_OBJECT_SOURCE}\b|\b${POLICY_CONCRETE_DATA_OBJECT_SOURCE}\b.{0,120}\b(?:is|are|may be|might be|can be|will be)?\s*(?:collected|processed|used|shared|sold|retained|stored|deleted)\b|\b${POLICY_USE_DATA_ACTION_SOURCE}\b.{0,80}\bcookies?\b`,
+  "i"
+);
+const KOREAN_POLICY_DATA_ACTION_PATTERN = /(?:수집|처리|이용|사용|제공|공유|판매|보유|저장|파기|삭제)(?:하|합|됩|되|했|할|해)/;
+const KOREAN_POLICY_BARE_DATA_ACTION_PATTERN = /(?:수집|처리|이용|사용|제공|공유|판매|보유|저장|파기|삭제)/;
+const KOREAN_POLICY_DATA_OBJECT_PATTERN = /(?:개인정보|개인\s*정보|아동.{0,12}정보|이름|이메일|전화번호|쿠키|위치|결제\s*정보)/;
+const KOREAN_POLICY_CONTROLLER_PATTERN = /(?:회사|당사|서비스\s*제공자|운영자|개인정보처리자)/;
+
+function policyEvidenceText(sentence) {
+  return String(sentence || "").replace(
+    POLICY_DOCUMENT_MARKER_GLOBAL_PATTERN,
+    (marker) => " ".repeat(marker.length)
+  );
+}
+
+function hasLeadingDocumentMarker(text, markerPattern) {
+  const markerMatch = markerPattern.exec(text);
+  if (!markerMatch) return false;
+  return markerMatch.index <= Math.min(2_000, Math.floor(text.length * 0.4));
+}
+
+function assessPolicyText(text, sentences) {
+  const normalized = text.toLowerCase();
+  const explicitPolicyMarker = POLICY_DOCUMENT_MARKER_PATTERN.test(normalized);
+  const leadingPrivacyMarker = hasLeadingDocumentMarker(text, PRIVACY_DOCUMENT_MARKER_PATTERN);
+  const leadingTermsMarker = hasLeadingDocumentMarker(text, TERMS_DOCUMENT_MARKER_PATTERN);
+  const dataPractice = sentences.some((sentence) => {
+    const evidenceText = policyEvidenceText(sentence);
+    if (
+      POLICY_EXPOSITORY_FRAME_PATTERN.test(evidenceText) ||
+      POLICY_ACCOUNT_HELP_PATTERN.test(evidenceText)
+    ) {
+      return false;
+    }
+    return (
+      POLICY_CONTROLLER_SPECIFIC_PRACTICE_PATTERN.test(evidenceText) ||
+      (POLICY_CONTROLLER_GENERIC_PRACTICE_PATTERN.test(evidenceText) &&
+        (leadingPrivacyMarker || POLICY_USER_NEXUS_PATTERN.test(evidenceText))) ||
+      (leadingPrivacyMarker &&
+        !POLICY_IMPERATIVE_DATA_ACTION_PATTERN.test(evidenceText) &&
+        (POLICY_DIRECT_SPECIFIC_PRACTICE_PATTERN.test(evidenceText) ||
+          POLICY_DIRECT_CONCRETE_PRACTICE_PATTERN.test(evidenceText))) ||
+      (KOREAN_POLICY_DATA_OBJECT_PATTERN.test(evidenceText) &&
+        ((KOREAN_POLICY_DATA_ACTION_PATTERN.test(evidenceText) &&
+          (leadingPrivacyMarker || KOREAN_POLICY_CONTROLLER_PATTERN.test(evidenceText))) ||
+          (leadingPrivacyMarker && KOREAN_POLICY_BARE_DATA_ACTION_PATTERN.test(evidenceText))))
+    );
+  });
+  const englishPrivacyRightsPattern = /\b(?:right to (?:access|delete|erasure)|withdraw consent|retention period|retain(?:ed)? for|request (?:access(?: to)?|correction(?: of)?|deletion(?: of)?|erasure(?: of)?)|you (?:may|can) (?:access|correct|delete|erase))\b.{0,120}\b(?:personal|your|user|customer) (?:data|information)\b|\bdata subject\b/i;
+  const koreanPrivacyRightsPattern = /정보주체|(?:동의\s*철회|열람|정정|보유\s*기간|파기).{0,120}(?:개인정보|개인\s*정보)|(?:개인정보|개인\s*정보).{0,120}(?:동의\s*철회|열람|정정|보유\s*기간|파기)/;
+  const rightsOrRetention = sentences.some((sentence) => {
+    const evidenceText = policyEvidenceText(sentence);
+    if (POLICY_EXPOSITORY_FRAME_PATTERN.test(evidenceText)) return false;
+    return (
+      leadingPrivacyMarker &&
+      (englishPrivacyRightsPattern.test(evidenceText) || koreanPrivacyRightsPattern.test(evidenceText))
+    );
+  });
+  const termsEvidenceSentences = sentences
+    .map(policyEvidenceText)
+    .filter((sentence) => !POLICY_EXPOSITORY_FRAME_PATTERN.test(sentence));
+  const prescriptiveArbitrationClause = termsEvidenceSentences.some((sentence) =>
+    /\b(?:dispute|claim|controversy|party|parties|you|user).{0,100}(?:subject to|resolved by|requires?|must|shall|will).{0,80}binding arbitration\b|\bbinding arbitration\b.{0,80}(?:is required|shall|required|must|waive)/i.test(sentence)
+  );
+  const prescriptiveClassActionClause = termsEvidenceSentences.some((sentence) =>
+    /\b(?:waive|waiver|may not bring|no)\b.{0,80}\bclass action\b/i.test(sentence)
+  );
+  const contextualLiabilityClause =
+    termsEvidenceSentences.some((sentence) =>
+      /limitation of liability|\bnot liable\b|\bdisclaim(?:er|s|ed|ing)?\b|책임\s*제한|면책|손해.{0,120}책임(?:을|이)?\s*(?:지지\s*않|없)/i.test(sentence)
+    );
+  const providerTerminationClause =
+    termsEvidenceSentences.some((sentence) =>
+      /\b(?:we|the company|our company|the provider|service provider)\b\s+(?:(?:may|can|will|shall|also)\s+){0,4}(?:suspend|terminate|close)\b.{0,80}\b(?:your )?account\b|\breserves? the right to\s+(?:suspend|terminate|close)\b.{0,80}\b(?:your )?account\b|(?:회사|서비스\s*제공자).{0,80}계정.{0,80}(?:해지|정지)/i.test(sentence)
+    );
+  const normalizedTermsEvidence = termsEvidenceSentences.join(" ").toLowerCase();
+  const weakTermsSignalCount = [
+    /\b(?:these terms|this agreement)\b.{0,100}\b(?:governed by|construed under|governing law)\b|준거법|관할\s*법원/i,
+    /acceptable use.{0,100}(?:prohibit|must|may not|rules?)|금지\s*행위/i,
+    /intellectual property.{0,100}(?:rights?|ownership|licen[cs]e|remain|belong)|지식재산권/i,
+    /agree to (?:these|the) terms|agree to be bound|약관에\s*동의/i
+  ].filter((pattern) => pattern.test(normalizedTermsEvidence)).length;
+  const termsClause =
+    leadingTermsMarker &&
+    (prescriptiveArbitrationClause ||
+      prescriptiveClassActionClause ||
+      contextualLiabilityClause ||
+      providerTerminationClause ||
+      weakTermsSignalCount >= 2);
+  const score = Math.min(
+    1,
+    // A footer link or title alone is not enough evidence that the supplied
+    // body is itself a policy document.
+    (explicitPolicyMarker ? 0.35 : 0) + (dataPractice ? 0.5 : 0) + (rightsOrRetention ? 0.25 : 0) + (termsClause ? 0.5 : 0)
+  );
+
+  return {
+    score,
+    likely: score >= 0.5 && (dataPractice || rightsOrRetention || termsClause)
+  };
 }
 
 function findDataCategories(text) {
-  const lower = text.toLowerCase();
+  const normalized = normalizeMatchTokens(text);
   return DATA_CATEGORIES.filter((category) =>
-    category.examples.some((example) => lower.includes(example.toLowerCase()))
+    category.examples.some((example) => includesDataExample(normalized, example))
   ).map((category) => ({
     id: category.id,
     label: dataCategoryLabel(category.id),
-    matched: category.examples.filter((example) => lower.includes(example.toLowerCase())).slice(0, 4)
+    matched: category.examples.filter((example) => includesDataExample(normalized, example)).slice(0, 4)
   }));
 }
 
@@ -1008,41 +1614,73 @@ function scoreRisks(risks, dataCategories) {
   return Math.min(100, severityScore + dataScore);
 }
 
-function riskLevel(score) {
+function riskLevel(score, risks = []) {
+  const highRiskCount = risks.filter((risk) => risk.severity === "high").length;
   if (score >= 60) return "high";
+  if (highRiskCount >= 2) return "high";
   if (score >= 35) return "medium";
+  if (highRiskCount > 0) return "medium";
   return "low";
 }
 
 export function analyzePolicy(inputText) {
-  const text = inputText.trim();
+  const text = boundedPolicyText(inputText).trim();
   if (!text) {
     return {
       ok: false,
+      status: "empty",
+      level: "unknown",
       message: tA("finding.noPolicyText")
     };
   }
 
   const sentences = getSentences(text);
+  const policyAssessment = assessPolicyText(text, sentences);
+  if (!policyAssessment.likely) {
+    const message = tA("finding.notPolicyText");
+    return {
+      ok: false,
+      status: "not_policy",
+      message,
+      wordCount: text.split(/\s+/).filter(Boolean).length,
+      score: null,
+      level: "unknown",
+      levelLabel: riskLevelLabel("unknown"),
+      policyConfidence: policyAssessment.score,
+      dataCategories: [],
+      risks: [],
+      positives: [],
+      policySections: [],
+      summary: message
+    };
+  }
+
   const policySections = extractPolicySections(text);
   const dataCategories = findDataCategories(text);
-  const risks = RISK_RULES.filter((rule) => includesAny(text, rule.patterns)).map((rule) => ({
+  const risks = RISK_RULES.filter((rule) => matchesRiskRule(rule, text, sentences)).map((rule) => ({
     id: rule.id,
     severity: rule.severity,
     title: riskRuleLabel(rule.id),
     advice: riskRuleAdvice(rule.id),
-    evidence: getEvidence(sentences, rule.patterns)
+    evidence: getRiskEvidence(rule, sentences)
   }));
   const positives = POSITIVE_RULES.filter((rule) => includesAny(text, rule.patterns)).map((rule) => positiveRuleLabel(rule.id));
   const score = scoreRisks(risks, dataCategories);
-  const level = riskLevel(score);
+  const level = riskLevel(score, risks);
+  const overallSeverity = risks.reduce(
+    (highest, risk) => (riskRank(risk.severity) > riskRank(highest) ? risk.severity : highest),
+    "low"
+  );
 
   return {
     ok: true,
+    status: "analyzed",
     wordCount: text.split(/\s+/).filter(Boolean).length,
     score,
     level,
     levelLabel: riskLevelLabel(level),
+    policyConfidence: policyAssessment.score,
+    overallSeverity,
     dataCategories,
     risks: risks.sort((a, b) => {
       const order = { high: 0, medium: 1, low: 2 };
@@ -1055,7 +1693,7 @@ export function analyzePolicy(inputText) {
 }
 
 export function extractPolicySections(inputText) {
-  const text = (inputText || "").trim();
+  const text = boundedPolicyText(inputText).trim();
   if (!text) return [];
 
   const blocks = splitPolicyBlocks(text);
@@ -1087,22 +1725,36 @@ export function extractPolicySections(inputText) {
 export function analyzeNetworkActivity(policyText, requests, pageUrl, customVendorRules = []) {
   const normalizedRequests = Array.isArray(requests) ? requests : [];
   const pageHost = hostFromUrl(pageUrl);
-  const policy = (policyText || "").toLowerCase();
-  const policyDomains = extractPolicyDomains(policyText || "");
-  const policySections = extractPolicySections(policyText || "");
-  const disclosedCategories = findDataCategories(sectionText(policySections, ["collected_data"]) || policyText || "").map((category) => category.id);
+  const safePolicyText = boundedPolicyText(policyText);
+  const policy = safePolicyText.toLowerCase();
+  const policyDomains = extractPolicyDomains(safePolicyText);
+  const policySections = extractPolicySections(safePolicyText);
+  const disclosedCategories = findDataCategories(sectionText(policySections, ["collected_data"]) || safePolicyText).map((category) => category.id);
 
   const uniqueHosts = uniqueBy(normalizedRequests.filter((request) => request.host), (request) => request.host);
   const thirdPartyRequests = uniqueHosts.filter((request) => isThirdPartyHost(pageHost, request.host));
-  const vendorSummary = classifyVendorRequests(thirdPartyRequests, policySections, customVendorRules);
-  const trackerRequests = uniqueHosts.filter((request) => TRACKER_PATTERNS.some((pattern) => pattern.test(request.host) || pattern.test(request.url)));
+  const thirdPartyRequestDetails = normalizedRequests.filter(
+    (request) => request.host && isThirdPartyHost(pageHost, request.host)
+  );
+  const vendorSummary = classifyVendorRequests(
+    preferredVendorRequests(thirdPartyRequestDetails, customVendorRules),
+    policySections,
+    customVendorRules
+  );
+  const trackerRequests = uniqueBy(
+    normalizedRequests.filter((request) => request.host && isTrackerRequest(request)),
+    (request) => request.host
+  );
   const postedRequests = normalizedRequests.filter((request) => request.method === "POST" || request.method === "PUT" || request.method === "PATCH");
-  const insecureRequests = uniqueHosts.filter((request) => request.url.startsWith("http://"));
+  const insecureRequests = uniqueBy(
+    normalizedRequests.filter((request) => request.host && String(request.url || "").startsWith("http://")),
+    (request) => request.host
+  );
   const sensitiveFields = detectSensitiveFields(normalizedRequests);
 
   const findings = [];
   const undisclosedThirdParties = thirdPartyRequests
-    .filter((request) => !isHostDisclosed(request.host, policyDomains, policy))
+    .filter((request) => !isHostDisclosed(request.host, policyDomains, policy, customVendorRules))
     .slice(0, 8);
 
   if (undisclosedThirdParties.length > 0) {
@@ -1152,12 +1804,18 @@ export function analyzeNetworkActivity(policyText, requests, pageUrl, customVend
     });
   }
 
-  if (postedRequests.some((request) => isThirdPartyHost(pageHost, request.host))) {
+  const thirdPartyPosts = postedRequests.filter((request) => isThirdPartyHost(pageHost, request.host));
+  if (thirdPartyPosts.length > 0) {
     findings.push({
       id: "third_party_post",
       severity: "medium",
       title: sectionFindingTitle("third_party_post_title"),
-      detail: tA("findingTemplates.vendorPolicyGap", ["POST/PUT/PATCH 요청"]),
+      detail: tA("findingTemplates.thirdPartyPost", [
+        uniqueBy(thirdPartyPosts.filter((request) => request.host), (request) => request.host)
+          .slice(0, 8)
+          .map((request) => request.host)
+          .join(", ")
+      ]),
       advice: sectionFindingAdvice("third_party_post")
     });
   }
@@ -1187,8 +1845,9 @@ export function analyzeNetworkActivity(policyText, requests, pageUrl, customVend
 
 export function analyzeFormFields(policyText, fields) {
   const normalizedFields = Array.isArray(fields) ? fields : [];
-  const policySections = extractPolicySections(policyText || "");
-  const disclosedCategories = findDataCategories(sectionText(policySections, ["collected_data"]) || policyText || "").map((category) => category.id);
+  const safePolicyText = boundedPolicyText(policyText);
+  const policySections = extractPolicySections(safePolicyText);
+  const disclosedCategories = findDataCategories(sectionText(policySections, ["collected_data"]) || safePolicyText).map((category) => category.id);
   const classifiedFields = normalizedFields
     .map((field) => ({
       ...field,
@@ -1248,8 +1907,9 @@ export function analyzeFormFields(policyText, fields) {
 }
 
 export function analyzeClientStorage(policyText, storage = {}, cookies = [], pageUrl = "") {
-  const policy = (policyText || "").toLowerCase();
-  const policySections = extractPolicySections(policyText || "");
+  const safePolicyText = boundedPolicyText(policyText);
+  const policy = safePolicyText.toLowerCase();
+  const policySections = extractPolicySections(safePolicyText);
   const pageHost = hostFromUrl(pageUrl);
   const storageKeys = [...(storage.localStorageKeys || []), ...(storage.sessionStorageKeys || [])];
   const classifiedStorage = classifyKeys(storageKeys);
@@ -1258,7 +1918,7 @@ export function analyzeClientStorage(policyText, storage = {}, cookies = [], pag
     const domain = (cookie.domain || "").replace(/^\./, "");
     return pageHost && domain && isThirdPartyHost(pageHost, domain);
   });
-  const trackingCookies = activeCookies.filter((cookie) => /ga|gid|fbp|fbc|gcl|ajs|amplitude|mixpanel|visitor|track/i.test(cookie.name));
+  const trackingCookies = activeCookies.filter((cookie) => isTrackingCookieName(cookie.name));
   const weakCookies = activeCookies.filter((cookie) => !cookie.secure || cookie.sameSite === "no_restriction");
   const findings = [];
 
@@ -1322,55 +1982,86 @@ export function analyzeClientStorage(policyText, storage = {}, cookies = [], pag
 }
 
 export function analyzeConsentCompliance(consent = {}, requests = [], cookies = []) {
-  const containers = Array.isArray(consent.containers) ? consent.containers : [];
-  const allText = containers
-    .flatMap((container) => [
-      container.text || "",
-      ...(container.buttons || []),
-      ...(container.toggles || []).map((toggle) => `${toggle.label || ""} ${toggle.name || ""} ${toggle.id || ""}`)
-    ])
-    .join(" ")
-    .toLowerCase();
-  const rejectAvailable = hasRejectSignal(allText);
-  const acceptAvailable = hasAcceptSignal(allText);
-  const preferenceAvailable = hasPreferenceSignal(allText);
-  const trackingRequests = (Array.isArray(requests) ? requests : []).filter((request) =>
-    TRACKER_PATTERNS.some((pattern) => pattern.test(request.host || "") || pattern.test(request.url || ""))
-  );
+  const containers = Array.isArray(consent.containers)
+    ? consent.containers.slice(0, 8).filter((container) => container && typeof container === "object")
+    : [];
+  const consentDetected = Boolean(consent.detected || containers.length > 0 || consent.detectedAt);
+  const visibleChoiceKinds = containers
+    .flatMap((container) => (Array.isArray(container.buttons) ? container.buttons.slice(0, 32) : []))
+    .map(classifyConsentChoice);
+  const rejectAvailable = visibleChoiceKinds.includes("necessary_only");
+  const acceptAvailable = visibleChoiceKinds.includes("accept_all");
+  const preferenceAvailable = visibleChoiceKinds.some((kind) => ["preferences", "save_choices"].includes(kind));
+  const trackingRequests = (Array.isArray(requests) ? requests : []).filter(isTrackerRequest);
   const trackingCookies = (Array.isArray(cookies) ? cookies : []).filter(
-    (cookie) => !cookie.removed && /ga|gid|fbp|fbc|gcl|ajs|amplitude|mixpanel|visitor|track/i.test(cookie.name || "")
+    (cookie) =>
+      isTrackingCookieName(cookie.name) &&
+      (!cookie.removed || Boolean(causallyTrustedCookieSetTimestamps(cookie)))
   );
+  const timeline = resolveConsentTimeline(consent);
+  const requestTiming = classifyEventsAroundBoundary(trackingRequests, timeline);
+  const cookieTiming = classifyCookieEvidenceAroundBoundary(trackingCookies, timeline);
+  const observedTrackingRequests = [...requestTiming.before, ...requestTiming.after, ...requestTiming.unknown];
+  const observedTrackingCookies = cookieTiming.observed;
+  const potentiallyPreChoiceRequests = timeline.boundaryAt
+    ? requestTiming.before
+    : observedTrackingRequests;
+  const potentiallyPreChoiceCookies = timeline.boundaryAt
+    ? cookieTiming.before
+    : observedTrackingCookies;
   const consentCategories = detectConsentCategories(containers);
-  const choiceAnalyses = buildConsentChoiceAnalyses(containers, consentCategories, trackingRequests, trackingCookies);
-  const disabledTrackingToggles = containers.flatMap((container) =>
-    (container.toggles || []).filter((toggle) => {
+  const choiceAnalyses = buildConsentChoiceAnalyses(
+    containers,
+    consentCategories,
+    potentiallyPreChoiceRequests,
+    potentiallyPreChoiceCookies
+  );
+  const choiceToggles = Array.isArray(consent.choice?.toggles) ? consent.choice.toggles.slice(0, 40) : [];
+  const disabledTrackingToggles = uniqueBy(
+    [...containers.flatMap((container) => (Array.isArray(container.toggles) ? container.toggles.slice(0, 40) : [])), ...choiceToggles].filter((toggle) => {
+      if (!toggle || typeof toggle !== "object") return false;
       const descriptor = `${toggle.label || ""} ${toggle.name || ""} ${toggle.id || ""}`.toLowerCase();
       return !toggle.checked && /analytics|advertising|ads|marketing|tracking|광고|분석|마케팅|추적/.test(descriptor);
-    })
+    }),
+    (toggle) => `${toggle.label || ""}:${toggle.name || ""}:${toggle.id || ""}`.toLowerCase()
   );
   const findings = [];
 
-  if ((trackingRequests.length > 0 || trackingCookies.length > 0) && !consent.detected) {
+  if ((observedTrackingRequests.length > 0 || observedTrackingCookies.length > 0) && !consentDetected) {
     findings.push({
       id: "tracking_without_visible_consent",
-      severity: "high",
+      severity: timeline.observationStartedAt ? "high" : "medium",
+      confidence: timeline.observationStartedAt ? "medium" : "low",
       title: sectionFindingTitle("tracking_without_visible_consent_title"),
-      detail: tA("findingTemplates.trackingWithoutVisibleConsent", [trackingRequests.length, trackingCookies.length]),
+      detail: tA("findingTemplates.trackingWithoutVisibleConsent", [observedTrackingRequests.length, observedTrackingCookies.length]),
       advice: sectionFindingAdvice("tracking_without_visible_consent")
     });
   }
 
-  if (consent.detected && (trackingRequests.length > 0 || trackingCookies.length > 0)) {
+  const definitePreChoiceCount = requestTiming.before.length + cookieTiming.before.length;
+  const unknownTimingCount = requestTiming.unknown.length + cookieTiming.unknown.length;
+  const trackingObserved = observedTrackingRequests.length > 0 || observedTrackingCookies.length > 0;
+
+  if (consentDetected && timeline.boundaryAt && definitePreChoiceCount > 0) {
     findings.push({
       id: "tracking_before_clear_choice",
       severity: "high",
       title: sectionFindingTitle("tracking_before_clear_choice_title"),
-      detail: tA("findingTemplates.trackingBeforeClearChoice", [trackingRequests.length, trackingCookies.length]),
+      detail: tA("findingTemplates.trackingBeforeClearChoice", [requestTiming.before.length, cookieTiming.before.length]),
+      advice: sectionFindingAdvice("tracking_before_clear_choice")
+    });
+  } else if (consentDetected && trackingObserved && (!timeline.boundaryAt || unknownTimingCount > 0)) {
+    findings.push({
+      id: "tracking_before_clear_choice",
+      severity: "medium",
+      confidence: "low",
+      title: sectionFindingTitle("tracking_before_clear_choice_title"),
+      detail: tA("findingTemplates.trackingTimingUnknown", [observedTrackingRequests.length, observedTrackingCookies.length]),
       advice: sectionFindingAdvice("tracking_before_clear_choice")
     });
   }
 
-  if (consent.detected && acceptAvailable && !rejectAvailable && !preferenceAvailable) {
+  if (consentDetected && acceptAvailable && !rejectAvailable && !preferenceAvailable) {
     findings.push({
       id: "consent_no_reject_option",
       severity: "medium",
@@ -1380,7 +2071,7 @@ export function analyzeConsentCompliance(consent = {}, requests = [], cookies = 
     });
   }
 
-  if (consent.detected && acceptAvailable && !rejectAvailable && preferenceAvailable) {
+  if (consentDetected && acceptAvailable && !rejectAvailable && preferenceAvailable) {
     findings.push({
       id: "reject_hidden_in_preferences",
       severity: "medium",
@@ -1390,7 +2081,30 @@ export function analyzeConsentCompliance(consent = {}, requests = [], cookies = 
     });
   }
 
-  if (disabledTrackingToggles.length > 0 && (trackingRequests.length > 0 || trackingCookies.length > 0)) {
+  const definitePostChoiceCount = requestTiming.after.length + cookieTiming.after.length;
+  const rejectedTracking = ["reject_all", "necessary_only"].includes(timeline.choiceKind);
+  const acceptedAllTracking = timeline.choiceKind === "accept_all";
+  if (rejectedTracking && timeline.boundaryAt && definitePostChoiceCount > 0) {
+    findings.push({
+      id: "tracking_after_rejection",
+      severity: "high",
+      confidence: "high",
+      title: sectionFindingTitle("tracking_after_rejection_title"),
+      detail: tA("findingTemplates.trackingAfterRejection", [requestTiming.after.length, cookieTiming.after.length]),
+      advice: sectionFindingAdvice("tracking_after_rejection")
+    });
+  } else if (rejectedTracking && trackingObserved && unknownTimingCount > 0) {
+    findings.push({
+      id: "tracking_after_rejection",
+      severity: "medium",
+      confidence: "low",
+      title: sectionFindingTitle("tracking_after_rejection_title"),
+      detail: tA("findingTemplates.trackingAfterRejectionTimingUnknown", [requestTiming.unknown.length, cookieTiming.unknown.length]),
+      advice: sectionFindingAdvice("tracking_after_rejection")
+    });
+  }
+
+  if (!rejectedTracking && !acceptedAllTracking && disabledTrackingToggles.length > 0 && timeline.boundaryAt && definitePostChoiceCount > 0) {
     findings.push({
       id: "tracking_despite_disabled_toggle",
       severity: "high",
@@ -1398,24 +2112,213 @@ export function analyzeConsentCompliance(consent = {}, requests = [], cookies = 
       detail: tA("findingTemplates.trackingDespiteDisabledToggle", [disabledTrackingToggles.length]),
       advice: sectionFindingAdvice("tracking_despite_disabled_toggle")
     });
+  } else if (
+    !rejectedTracking &&
+    !acceptedAllTracking &&
+    disabledTrackingToggles.length > 0 &&
+    trackingObserved &&
+    (!timeline.boundaryAt || unknownTimingCount > 0)
+  ) {
+    findings.push({
+      id: "tracking_despite_disabled_toggle",
+      severity: "medium",
+      confidence: "low",
+      title: sectionFindingTitle("tracking_despite_disabled_toggle_title"),
+      detail: tA("findingTemplates.trackingDisabledTimingUnknown", [disabledTrackingToggles.length]),
+      advice: sectionFindingAdvice("tracking_despite_disabled_toggle")
+    });
   }
 
   return {
-    detected: Boolean(consent.detected),
+    detected: consentDetected,
     bannerCount: containers.length,
     rejectAvailable,
     acceptAvailable,
     preferenceAvailable,
     consentCategories,
     choiceAnalyses,
-    trackingRequestCount: trackingRequests.length,
-    trackingCookieCount: trackingCookies.length,
+    trackingRequestCount: observedTrackingRequests.length,
+    trackingCookieCount: observedTrackingCookies.length,
+    preChoiceTrackingRequestCount: requestTiming.before.length,
+    preChoiceTrackingCookieCount: cookieTiming.before.length,
+    postChoiceTrackingRequestCount: requestTiming.after.length,
+    postChoiceTrackingCookieCount: cookieTiming.after.length,
+    unclassifiedTrackingRequestCount: requestTiming.unknown.length,
+    unclassifiedTrackingCookieCount: cookieTiming.unknown.length,
+    ignoredPreObservationTrackingRequestCount: requestTiming.outside.length,
+    ignoredPreObservationTrackingCookieCount: cookieTiming.outside.length,
+    timing: timeline,
+    choiceKind: timeline.choiceKind,
     disabledTrackingToggleCount: disabledTrackingToggles.length,
     findings: findings.sort((a, b) => {
       const order = { high: 0, medium: 1, low: 2 };
       return order[a.severity] - order[b.severity];
     })
   };
+}
+
+function resolveConsentTimeline(consent) {
+  const observationStartedAt = firstTimestamp(
+    consent.observationStartedAt,
+    consent.startedAt,
+    consent.pageLoadedAt,
+    consent.observation?.startedAt
+  );
+  const choiceAt = firstTimestamp(
+    consent.choice?.at,
+    consent.choice?.timeStamp,
+    consent.choiceAt,
+    consent.choiceTimestamp,
+    consent.lastChoiceAt
+  );
+  const choiceKind = normalizeConsentChoiceKind(consent.choice?.kind) || normalizeConsentChoiceKind(consent.choiceKind);
+  const snapshotAt = firstTimestamp(
+    consent.snapshotAt,
+    consent.snapshotCreatedAt,
+    consent.baselineAt,
+    consent.snapshot?.createdAt
+  );
+  const detectedAt = firstTimestamp(consent.detectedAt, consent.uiDetectedAt, consent.observation?.consentDetectedAt);
+  // A user-created observation snapshot is useful for delta analysis, but it
+  // does not prove that a consent choice happened at that time.
+  const boundaryAt = choiceAt || null;
+
+  return {
+    observationStartedAt,
+    detectedAt,
+    choiceAt,
+    choiceKind,
+    snapshotAt,
+    boundaryAt,
+    boundaryType: choiceAt ? "choice" : "none",
+    ambiguityWindowMs: CONSENT_BOUNDARY_AMBIGUITY_MS,
+    confidence: boundaryAt ? "high" : "low"
+  };
+}
+
+function normalizeConsentChoiceKind(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["reject_all", "necessary_only"].includes(normalized)) return normalized;
+  if (normalized === "accept_all") return normalized;
+  if (["save_preferences", "save_choices"].includes(normalized)) return "save_preferences";
+  return null;
+}
+
+function firstTimestamp(...values) {
+  for (const value of values) {
+    if (Number.isFinite(value) && value > 0) return Number(value);
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function classifyEventsAroundBoundary(events, timeline, timestampReader = eventTimestamp) {
+  const before = [];
+  const after = [];
+  const unknown = [];
+  const outside = [];
+
+  for (const event of events) {
+    const timeStamp = timestampReader(event);
+    const bucket = eventTimingBucket(timeStamp, timeline);
+    ({ before, after, unknown, outside })[bucket].push(event);
+  }
+
+  return { before, after, unknown, outside };
+}
+
+function eventTimestamp(event) {
+  return firstTimestamp(event?.timeStamp, event?.timestamp, event?.createdAt, event?.observedAt);
+}
+
+function eventTimingBucket(timeStamp, timeline) {
+  if (!timeStamp) return "unknown";
+  if (timeline.observationStartedAt && timeStamp < timeline.observationStartedAt) return "outside";
+  if (!timeline.boundaryAt) return "unknown";
+  if (Math.abs(timeStamp - timeline.boundaryAt) <= CONSENT_BOUNDARY_AMBIGUITY_MS) {
+    return "unknown";
+  }
+  return timeStamp < timeline.boundaryAt ? "before" : "after";
+}
+
+function causallyTrustedCookieSetTimestamps(cookie) {
+  if (cookie?.timingConfidence !== "observed") return null;
+  const topLevelSite = cookie?.partitionKey?.topLevelSite;
+  try {
+    const parsed = new URL(String(topLevelSite || ""));
+    if (!["http:", "https:"].includes(parsed.protocol) || parsed.origin !== topLevelSite) return null;
+  } catch {
+    return null;
+  }
+  const explicitFirst = firstTimestamp(cookie?.firstSetObservedAt);
+  const legacyFirst = firstTimestamp(
+    cookie?.firstObservedAt,
+    cookie?.timeStamp,
+    cookie?.observedAt
+  );
+  const deletedAt = firstTimestamp(cookie?.deletedAt);
+  if (!explicitFirst && cookie?.removed && legacyFirst && legacyFirst === deletedAt) {
+    return null;
+  }
+  const first = explicitFirst || legacyFirst;
+  if (!first) return null;
+  const explicitLast = firstTimestamp(cookie?.lastSetObservedAt);
+  const legacyLast = firstTimestamp(cookie?.lastObservedAt);
+  // Legacy tombstones could have copied deletedAt into lastObservedAt. Only
+  // explicit set/update evidence may prove post-choice tracking.
+  const safeLegacyLast =
+    !explicitLast &&
+    legacyLast &&
+    cookie?.removed &&
+    deletedAt === legacyLast
+      ? null
+      : legacyLast;
+  return {
+    first,
+    last: Math.max(first, explicitLast || safeLegacyLast || first)
+  };
+}
+
+function classifyCookieEvidenceAroundBoundary(cookies, timeline) {
+  const bucketIndexes = {
+    before: new Set(),
+    after: new Set(),
+    unknown: new Set(),
+    outside: new Set()
+  };
+  cookies.forEach((cookie, index) => {
+    const evidence = causallyTrustedCookieSetTimestamps(cookie);
+    const timestamps = evidence
+      ? Array.from(new Set([evidence.first, evidence.last]))
+      : [null];
+    for (const timeStamp of timestamps) {
+      bucketIndexes[eventTimingBucket(timeStamp, timeline)].add(index);
+    }
+  });
+  const asCookies = (indexes) => Array.from(indexes, (index) => cookies[index]);
+  const before = asCookies(bucketIndexes.before);
+  const after = asCookies(bucketIndexes.after);
+  const unknown = asCookies(bucketIndexes.unknown);
+  const outside = asCookies(bucketIndexes.outside);
+  const observedIndexes = new Set([
+    ...bucketIndexes.before,
+    ...bucketIndexes.after,
+    ...bucketIndexes.unknown
+  ]);
+  return {
+    before,
+    after,
+    unknown,
+    outside,
+    observed: asCookies(observedIndexes)
+  };
+}
+
+function causallyTrustedCookieLatestSetTimestamp(cookie) {
+  return causallyTrustedCookieSetTimestamps(cookie)?.last || null;
 }
 
 export function analyzeObservationDelta(snapshot = null, requests = [], cookies = []) {
@@ -1427,13 +2330,11 @@ export function analyzeObservationDelta(snapshot = null, requests = [], cookies 
   }
 
   const laterRequests = (Array.isArray(requests) ? requests : []).filter((request) => request.timeStamp > snapshot.createdAt);
-  const laterCookies = (Array.isArray(cookies) ? cookies : []).filter((cookie) => !cookie.removed && cookie.timeStamp > snapshot.createdAt);
-  const newTrackingRequests = laterRequests.filter((request) =>
-    TRACKER_PATTERNS.some((pattern) => pattern.test(request.host || "") || pattern.test(request.url || ""))
+  const laterCookies = (Array.isArray(cookies) ? cookies : []).filter(
+    (cookie) => causallyTrustedCookieLatestSetTimestamp(cookie) > snapshot.createdAt
   );
-  const newTrackingCookies = laterCookies.filter((cookie) =>
-    /ga|gid|fbp|fbc|gcl|ajs|amplitude|mixpanel|visitor|track/i.test(cookie.name || "")
-  );
+  const newTrackingRequests = laterRequests.filter(isTrackerRequest);
+  const newTrackingCookies = laterCookies.filter((cookie) => isTrackingCookieName(cookie.name));
   const newPosts = laterRequests.filter((request) => ["POST", "PUT", "PATCH"].includes(request.method) && request.host);
   const findings = [];
 
@@ -1462,7 +2363,11 @@ export function analyzeObservationDelta(snapshot = null, requests = [], cookies 
     snapshotLabel: snapshot.label,
     snapshotCreatedAt: snapshot.createdAt,
     requestDelta: Math.max(0, (Array.isArray(requests) ? requests.length : 0) - (snapshot.requestCount || 0)),
-    cookieDelta: Math.max(0, (Array.isArray(cookies) ? cookies.length : 0) - (snapshot.cookieCount || 0)),
+    cookieDelta: Math.max(
+      0,
+      (Array.isArray(cookies) ? cookies.filter((cookie) => !cookie.removed).length : 0) -
+        (snapshot.cookieCount || 0)
+    ),
     trackingRequestDelta: newTrackingRequests.length,
     trackingCookieDelta: newTrackingCookies.length,
     findings
@@ -1479,7 +2384,7 @@ export function detectJurisdiction(signals = {}) {
     return {
       code: "GDPR",
       label: jurisdictionLabel("GDPR"),
-      confidence: "high",
+      confidence: "medium",
       basis: jurisdictionBasisLabel("ip")
     };
   }
@@ -1488,7 +2393,7 @@ export function detectJurisdiction(signals = {}) {
     return {
       code: "KR",
       label: jurisdictionLabel("KR"),
-      confidence: "high",
+      confidence: "medium",
       basis: jurisdictionBasisLabel("ip")
     };
   }
@@ -1497,58 +2402,74 @@ export function detectJurisdiction(signals = {}) {
     return {
       code: "US",
       label: jurisdictionLabel("US"),
-      confidence: "high",
+      confidence: "medium",
       basis: jurisdictionBasisLabel("ip")
     };
   }
 
-  if (timeZone === "asia/seoul" || languageSignals.some((language) => language.startsWith("ko")) || host.endsWith(".kr")) {
-    return {
-      code: "KR",
-      label: jurisdictionLabel("KR"),
-      confidence: "high",
-      basis: jurisdictionBasisLabel("krSignal")
-    };
-  }
+  // A known non-KR/US/EU IP country is stronger than browser locale hints and
+  // must not be silently reinterpreted as one of those jurisdictions.
+  if (countryCode) return generalJurisdiction();
 
-  if (isEuSignal(languageSignals, timeZone, host)) {
-    return {
-      code: "GDPR",
-      label: jurisdictionLabel("GDPR"),
-      confidence: "medium",
-      basis: jurisdictionBasisLabel("euSignal")
-    };
-  }
-
-  if (timeZone.startsWith("america/") || languageSignals.includes("en-us") || host.endsWith(".us")) {
-    return {
-      code: "US",
-      label: jurisdictionLabel("US"),
-      confidence: host.endsWith(".us") || languageSignals.includes("en-us") ? "medium" : "low",
-      basis: jurisdictionBasisLabel("usSignal")
-    };
-  }
-
-  return {
-    code: "GENERAL",
-    label: jurisdictionLabel("GENERAL"),
-    confidence: "low",
-    basis: jurisdictionBasisLabel("uncertain")
+  const scores = { KR: 0, GDPR: 0, US: 0 };
+  const hostSignals = {
+    KR: host.endsWith(".kr"),
+    GDPR: isEuSignal([], "", host),
+    US: host.endsWith(".us")
   };
+  const languageMatches = {
+    KR: languageSignals.some((language) => language === "ko" || language.startsWith("ko-")),
+    GDPR: isEuSignal(languageSignals, "", ""),
+    US: languageSignals.some((language) => language === "en-us")
+  };
+  const timeZoneMatches = {
+    KR: timeZone === "asia/seoul",
+    GDPR: isEuEeaTimeZone(timeZone),
+    US: isUsTimeZone(timeZone)
+  };
+
+  for (const code of Object.keys(scores)) {
+    if (hostSignals[code]) scores[code] += 3;
+    if (languageMatches[code]) scores[code] += 1;
+    if (timeZoneMatches[code]) scores[code] += 1;
+  }
+
+  const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  const [winner, winnerScore] = ranked[0];
+  const runnerUpScore = ranked[1][1];
+  if (winnerScore === 0 || winnerScore === runnerUpScore) return generalJurisdiction();
+
+  const basisKey = winner === "KR" ? "krSignal" : winner === "GDPR" ? "euSignal" : "usSignal";
+  return {
+    code: winner,
+    label: jurisdictionLabel(winner),
+    confidence: winnerScore >= 3 ? "medium" : "low",
+    basis: jurisdictionBasisLabel(basisKey)
+  };
+
+  function generalJurisdiction() {
+    return {
+      code: "GENERAL",
+      label: jurisdictionLabel("GENERAL"),
+      confidence: "low",
+      basis: jurisdictionBasisLabel("uncertain")
+    };
+  }
 }
 
 export function analyzeJurisdictionCompliance(policyText, context = {}) {
   const jurisdiction = context.jurisdiction || detectJurisdiction(context.signals || {});
-  const policySections = extractPolicySections(policyText || "");
+  const safePolicyText = boundedPolicyText(policyText);
+  const policySections = extractPolicySections(safePolicyText);
   const observed = context.observed || {};
   const findings = [];
 
   if (jurisdiction.code === "KR") {
     findings.push(...analyzeKoreanPolicyRequirements(policySections, observed));
   } else if (jurisdiction.code === "US") {
-    findings.push(...analyzeUsPolicyRequirements(policySections, observed, policyText || ""));
+    findings.push(...analyzeUsPolicyRequirements(policySections, observed, safePolicyText));
   } else if (jurisdiction.code === "GDPR") {
-    findings.push(...analyzeGdprPolicyRequirements(policySections, observed, policyText || ""));
+    findings.push(...analyzeGdprPolicyRequirements(policySections, observed, safePolicyText));
   } else {
     findings.push({
       id: "jurisdiction_uncertain",
@@ -1569,7 +2490,7 @@ export function analyzeJurisdictionCompliance(policyText, context = {}) {
 }
 
 export function analyzeBehaviorPolicyAlignment(policyText, observed = {}) {
-  const policySections = extractPolicySections(policyText || "");
+  const policySections = extractPolicySections(boundedPolicyText(policyText));
   const vendorChecks = (observed.vendorSummary || [])
     .filter((vendor) => vendor.category !== "cdn_security")
     .map((vendor) => {
@@ -1635,13 +2556,20 @@ export function analyzeBehaviorPolicyAlignment(policyText, observed = {}) {
   const score = applicableChecks.length === 0 ? 100 : Math.round((alignedCount / applicableChecks.length) * 100);
   const findings = applicableChecks
     .filter((check) => !check.aligned)
-    .map((check) => ({
-      id: `alignment_missing_${check.id}`,
-      severity: check.id === "tracking" || check.id === "collected_data" ? "high" : "medium",
-      title: sectionFindingTitle(`alignment_missing_${check.id}`),
-      detail: check.reason,
-      advice: sectionFindingAdvice("alignment_generic")
-    }));
+    .map((check) => {
+      const titleId = check.id.startsWith("vendor_")
+        ? "vendor_policy_section_gap_title"
+        : check.id === "collected_data"
+          ? "alignment_missing_collect_title"
+          : `alignment_missing_${check.id}_title`;
+      return {
+        id: `alignment_missing_${check.id}`,
+        severity: check.id === "tracking" || check.id === "collected_data" ? "high" : "medium",
+        title: sectionFindingTitle(titleId),
+        detail: check.reason,
+        advice: sectionFindingAdvice("alignment_generic")
+      };
+    });
 
   return {
     score,
@@ -1811,9 +2739,8 @@ function analyzeUsPolicyRequirements(policySections, observed, policyText) {
   return findings;
 }
 
-function buildSummary(score, dataCategories, risks, positives) {
+function buildSummary(level, dataCategories, risks, positives) {
   const parts = [];
-  const level = riskLevel(score);
   parts.push(tA("findingTemplates.summaryIntro", [riskLevelLabel(level)]));
 
   if (dataCategories.length > 0) {
@@ -1888,15 +2815,9 @@ function hostFromUrl(url) {
   }
 }
 
-function getBaseDomain(host) {
-  const parts = host.replace(/^www\./, "").split(".").filter(Boolean);
-  if (parts.length <= 2) return parts.join(".");
-  return parts.slice(-2).join(".");
-}
-
 function isThirdPartyHost(pageHost, requestHost) {
   if (!pageHost || !requestHost) return false;
-  return getBaseDomain(pageHost) !== getBaseDomain(requestHost);
+  return registrableDomain(pageHost) !== registrableDomain(requestHost);
 }
 
 function uniqueBy(items, getKey) {
@@ -1914,13 +2835,40 @@ function extractPolicyDomains(text) {
   return Array.from(new Set(domains.map((domain) => domain.toLowerCase().replace(/^www\./, ""))));
 }
 
-function isHostDisclosed(host, policyDomains, policy) {
-  const lowerHost = host.toLowerCase().replace(/^www\./, "");
-  const baseDomain = getBaseDomain(lowerHost);
-  const explicitlyMentioned = policyDomains.some((domain) => lowerHost.endsWith(domain) || domain.endsWith(baseDomain));
-  const generallyDisclosed = /third parties?|processor|subprocessor|vendor|partner|affiliate|analytics|advertising|제3자|처리위탁|수탁|협력사|제휴사|광고|분석/.test(policy);
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
-  return explicitlyMentioned || generallyDisclosed;
+function policyMentionsVendorAlias(policy, alias) {
+  const normalizedAlias = String(alias || "").trim().toLowerCase();
+  const compactAlias = normalizedAlias.replace(/[^\p{L}\p{N}]/gu, "");
+  if (compactAlias.length < 4) return false;
+
+  const aliasPattern = escapeRegExp(normalizedAlias).replace(/\s+/g, "\\s+");
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}])${aliasPattern}(?=$|[^\\p{L}\\p{N}])`, "iu").test(policy);
+}
+
+function isHostDisclosed(host, policyDomains, policy, customVendorRules = []) {
+  const lowerHost = host.toLowerCase().replace(/^www\./, "");
+  const baseDomain = registrableDomain(lowerHost);
+  const explicitlyMentioned = policyDomains.some((domain) => {
+    const normalizedDomain = domain.toLowerCase().replace(/^www\./, "");
+    return (
+      lowerHost === normalizedDomain ||
+      lowerHost.endsWith(`.${normalizedDomain}`) ||
+      normalizedDomain.endsWith(`.${lowerHost}`) ||
+      (baseDomain && baseDomain === registrableDomain(normalizedDomain))
+    );
+  });
+  const vendor = classifyVendorHost(lowerHost, customVendorRules).vendor;
+  const vendorMentioned =
+    vendor !== "Unknown" &&
+    vendor
+      .toLowerCase()
+      .split(/\s*\/\s*/)
+      .some((alias) => policyMentionsVendorAlias(policy, alias));
+
+  return explicitlyMentioned || vendorMentioned;
 }
 
 function hasPolicySection(policySections, sectionId) {
@@ -1953,8 +2901,8 @@ function detectSensitiveFields(requests) {
 
   return SENSITIVE_FIELD_RULES.map((rule) => ({
     category: rule.category,
-    label: rule.label,
-    keys: keys.filter((key) => rule.patterns.some((pattern) => pattern.test(key))).slice(0, 8)
+    label: sensitiveFieldLabel(rule.category),
+    keys: keys.filter((key) => matchesSensitiveValue(key, rule.patterns)).slice(0, 8)
   })).filter((item) => item.keys.length > 0);
 }
 
@@ -1976,11 +2924,26 @@ function classifyVendorRequests(requests, policySections, customVendorRules = []
   });
 }
 
+function preferredVendorRequests(requests, customVendorRules = []) {
+  const byHost = new Map();
+  for (const request of requests) {
+    const current = byHost.get(request.host);
+    if (!current) {
+      byHost.set(request.host, request);
+      continue;
+    }
+    const currentVendor = classifyVendorHost(current.url || current.host, customVendorRules).vendor;
+    const nextVendor = classifyVendorHost(request.url || request.host, customVendorRules).vendor;
+    if (currentVendor === "Unknown" && nextVendor !== "Unknown") byHost.set(request.host, request);
+  }
+  return Array.from(byHost.values());
+}
+
 function classifyKeys(keys) {
   return SENSITIVE_FIELD_RULES.map((rule) => ({
     category: rule.category,
     label: sensitiveFieldLabel(rule.category),
-    keys: keys.filter((key) => rule.patterns.some((pattern) => pattern.test(key))).slice(0, 8)
+    keys: keys.filter((key) => matchesSensitiveValue(key, rule.patterns)).slice(0, 8)
   })).filter((item) => item.keys.length > 0);
 }
 
@@ -2029,7 +2992,15 @@ function buildConsentChoiceAnalyses(containers, consentCategories, trackingReque
 
   const hasToggleSettings = containers.some((container) => (container.toggles || []).length > 0);
   if (hasToggleSettings && !choices.some((choice) => choice.type === "preferences")) {
-    choices.push(buildConsentChoice("세부 설정", consentCategories, trackingRequests, trackingCookies, "preferences"));
+    choices.push(
+      buildConsentChoice(
+        tA("findingTemplates.syntheticPreferencesLabel"),
+        consentCategories,
+        trackingRequests,
+        trackingCookies,
+        "preferences"
+      )
+    );
   }
 
   return choices;
@@ -2057,8 +3028,14 @@ function buildConsentChoice(label, consentCategories, trackingRequests, tracking
 function classifyConsentChoice(label) {
   const text = (label || "").toLowerCase();
   if (hasRejectSignal(text)) return "necessary_only";
+  if (
+    /\b(?:save|apply)\s+(?:my\s+)?(?:preferences|settings|choices?|selections?)\b|\bconfirm\s+(?:my\s+)?(?:preferences|settings|choices?|selections?)\b|(?:설정|선택)\s*(?:저장|적용)|선택\s*완료/.test(
+      text
+    )
+  ) {
+    return "save_choices";
+  }
   if (/preference|settings|manage|customize|options|설정|관리|선택|맞춤|변경/.test(text)) return "preferences";
-  if (/save|confirm.*choice|apply|저장|적용|선택 완료|완료/.test(text)) return "save_choices";
   if (hasAcceptSignal(text) || /accept all|allow all|agree all|전체 동의|모두 허용|모두 수락|전부 허용/.test(text)) return "accept_all";
   return "unknown";
 }
@@ -2177,11 +3154,7 @@ function hasRejectSignal(text) {
 }
 
 function hasAcceptSignal(text) {
-  return /accept|agree|allow|consent|동의|허용|수락|확인/.test(text);
-}
-
-function hasPreferenceSignal(text) {
-  return /preference|settings|manage|customize|options|설정|관리|선택|맞춤|변경/.test(text);
+  return /accept|agree|allow|consent|동의|허용|수락/.test(text);
 }
 
 function isEuSignal(languageSignals, timeZone, host) {
@@ -2247,7 +3220,7 @@ function isEuSignal(languageSignals, timeZone, host) {
   ];
 
   return (
-    timeZone.startsWith("europe/") ||
+    isEuEeaTimeZone(timeZone) ||
     languageSignals.some((language) => euLanguagePrefixes.some((prefix) => language === prefix || language.startsWith(`${prefix}-`))) ||
     euTlds.some((tld) => host.endsWith(tld))
   );
@@ -2263,13 +3236,12 @@ function getFieldDescriptor(field) {
     field.type
   ]
     .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
+    .join(" ");
 }
 
 function classifyField(field) {
   const descriptor = getFieldDescriptor(field);
   if (!descriptor) return "";
-  const match = SENSITIVE_FIELD_RULES.find((rule) => rule.patterns.some((pattern) => pattern.test(descriptor)));
+  const match = SENSITIVE_FIELD_RULES.find((rule) => matchesSensitiveValue(descriptor, rule.patterns));
   return match?.category || "";
 }

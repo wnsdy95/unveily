@@ -3,7 +3,9 @@
   "name": "__MSG_appName__",
   "description": "__MSG_appDescription__",
   "version": "0.1.0",
+  "minimum_chrome_version": "140",
   "default_locale": "ko",
+  "incognito": "not_allowed",
   "action": {
     "default_popup": "src/popup.html",
     "default_title": "__MSG_actionTitle__",
@@ -13,17 +15,20 @@
       "128": "icons/icon.png"
     }
   },
-  "permissions": ["activeTab", "scripting", "webRequest", "cookies", "storage", "alarms", "notifications"],
+  "permissions": ["activeTab", "scripting", "webRequest", "webNavigation", "cookies", "storage", "alarms", "notifications"],
   "options_page": "src/options.html",
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": {
     "service_worker": "src/background.js",
     "type": "module"
   },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none';"
+  },
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["src/content.js"],
+      "js": ["src/domWorkLimits.js", "src/content.js", "src/companionOverlay.js"],
       "run_at": "document_idle"
     }
   ],

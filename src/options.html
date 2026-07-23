@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title data-i18n="optionTitle">unveily 설정</title>
+    <title data-i18n="optionTitle">unveily 설정</title>
     <link rel="stylesheet" href="./popup.css">
     <link rel="stylesheet" href="./options.css">
   </head>
@@ -12,8 +12,8 @@
       <header class="topbar">
         <div class="topbar-main">
           <div>
-            <h1 data-i18n="optionsHeading">로컬 벤더 룰</h1>
-            <p data-i18n="optionsDescription">사용자 정의 도메인 분류는 이 브라우저의 로컬 저장소에만 저장됩니다.</p>
+            <h1 data-i18n="optionsHeading">unveily 개인정보 및 로컬 설정</h1>
+            <p data-i18n="optionsDescription">상시 관찰은 기본으로 켜져 있습니다. 모든 허용된 HTTP/HTTPS 사이트에서 값 없는 요청·쿠키 메타데이터를 처리하고, 사용자 입력·편집 영역을 제외한 제한된 표시 텍스트로 정책 가능성을 로컬에서 판정합니다. 관찰 기록은 이 브라우저에만 저장됩니다. 정책으로 보일 때만 제한된 발췌문이 서비스 워커로 전달되며 관찰 기록이나 원격 서버에는 저장·전송되지 않습니다. 이 자동 메타데이터 관찰과 텍스트 스캔은 아래에서 함께 끄거나 사이트별로 제외할 수 있습니다.</p>
           </div>
           <label class="language-switch">
             <span data-i18n="languageLabel">언어</span>
@@ -26,15 +26,29 @@
         </div>
       </header>
 
+      <section id="status" class="status" role="status"></section>
+
+      <section class="panel observation-controls">
+        <h2 data-i18n="observationControlsTitle">상시 관찰 제어</h2>
+        <p data-i18n="observationControlsDescription">관찰 기록은 값 없는 제한된 메타데이터이며 최상위 사이트 이동 시 분리됩니다. 관찰을 끄거나 정확한 origin을 제외하면 해당 세션 기록도 삭제됩니다.</p>
+        <label class="observation-toggle">
+          <input id="observationEnabled" type="checkbox" checked>
+          <span data-i18n="observationEnabledLabel">HTTP/HTTPS 사이트 상시 관찰 사용</span>
+        </label>
+        <label for="excludedOrigins" data-i18n="excludedOriginsLabel">관찰 제외 사이트</label>
+        <textarea id="excludedOrigins" rows="4" maxlength="50000" placeholder="예: https://bank.example.com (한 줄에 하나)" data-i18n-placeholder="excludedOriginsPlaceholder"></textarea>
+        <button id="saveObservationSettingsButton" type="button" data-i18n="saveObservationSettings">관찰 설정 저장</button>
+      </section>
+
       <section class="panel">
         <form id="ruleForm" class="rule-form">
           <input id="ruleId" type="hidden">
 
           <label for="vendor" data-i18n="vendorName">벤더명</label>
-          <input id="vendor" required placeholder="예: NICE 본인인증" data-i18n-placeholder="vendorPlaceholder">
+          <input id="vendor" required maxlength="120" placeholder="예: NICE 본인인증" data-i18n-placeholder="vendorPlaceholder">
 
           <label for="patterns" data-i18n="domainPatterns">도메인 패턴</label>
-          <input id="patterns" required placeholder="예: niceid.co.kr, nice.co.kr" data-i18n-placeholder="domainPatternsPlaceholder">
+          <input id="patterns" required maxlength="25000" placeholder="예: niceid.co.kr, nice.co.kr" data-i18n-placeholder="domainPatternsPlaceholder">
 
           <label for="category" data-i18n="category">카테고리</label>
           <select id="category">
@@ -81,11 +95,9 @@
       </section>
 
       <section class="panel">
-        <h2 data-i18n="savedSnapshots">저장된 정책 스냅샷</h2>
+        <h2 data-i18n="savedSnapshots">저장된 정책 변경 감시</h2>
         <div id="snapshotList" class="rule-list"></div>
       </section>
-
-      <section id="status" class="status" role="status"></section>
     </main>
     <script type="module" src="./options.js"></script>
   </body>

@@ -62,3 +62,102 @@ test("builds safe report file names", () => {
 
   assert.equal(fileName, "unveily-report-service.example.com-2026-05-12.md");
 });
+
+test("falls back to a stable filename when the source title has no ASCII slug", () => {
+  assert.equal(
+    buildReportFileName({ title: "붙여넣은 텍스트", url: "" }, "json", new Date("2026-01-02T00:00:00.000Z")),
+    "unveily-report-report-2026-01-02.json"
+  );
+});
+
+test("removes credentials and query secrets from report sources", () => {
+  const payload = buildReportPayload({
+    source: {
+      title: "Private report",
+      url: "https://user:password@example.com/privacy?access_token=secret#account"
+    }
+  });
+
+  assert.deepEqual(payload.source, {
+    title: "example.com",
+    url: "https://example.com/privacy"
+  });
+  assert.doesNotMatch(buildJsonReport(payload), /password|access_token|secret/);
+});
+
+test("aggregates page identifiers out of exported report metadata", () => {
+  const payload = buildReportPayload({
+    source: {
+      title: "Alice's private dashboard",
+      url: "https://example.com/users/alice?account=alice#profile"
+    },
+    networkAnalysis: {
+      requestCount: 1,
+      thirdPartyHosts: [],
+      trackerHosts: [],
+      vendorSummary: [],
+      sensitiveFields: ["user_alice"]
+    },
+    formAnalysis: {
+      fieldCount: 1,
+      sensitiveFieldCount: 1,
+      categories: [{ id: "contact", label: "Contact", fields: [{ name: "email_alice", descriptor: "Alice email", required: true }] }],
+      findings: [{ id: "form", severity: "high", title: "Form metadata", detail: "email_alice", advice: "Review" }]
+    },
+    storageAnalysis: {
+      localStorageKeyCount: 1,
+      sessionStorageKeyCount: 0,
+      cookieCount: 0,
+      thirdPartyCookieCount: 0,
+      classifiedStorage: [{ category: "account", label: "Account", keys: ["session_alice"] }],
+      findings: [{ id: "storage", severity: "medium", title: "Storage metadata", detail: "session_alice", advice: "Review" }]
+    },
+    consentAnalysis: {
+      detected: true,
+      choiceAnalyses: [{ type: "accept_all", label: "Accept for Alice", allowedCategories: [], concerns: [], summary: "Accept all", riskLevel: "high" }],
+      findings: []
+    }
+  });
+  const json = buildJsonReport(payload);
+
+  assert.equal(payload.source.title, "example.com");
+  assert.equal(payload.source.url, "https://example.com/users/:segment");
+  assert.deepEqual(payload.analysis.form.categories[0], {
+    id: "contact",
+    label: "Contact",
+    fieldCount: 1,
+    requiredCount: 1
+  });
+  assert.deepEqual(payload.analysis.storage.classifiedStorage[0], {
+    category: "account",
+    label: "Account",
+    keyCount: 1
+  });
+  assert.equal(payload.analysis.network.sensitiveFieldCount, 1);
+  assert.doesNotMatch(json, /alice|email_alice|session_alice|Alice's private dashboard/i);
+});
+
+test("escapes page-controlled Markdown syntax in exported findings", () => {
+  const markdown = buildMarkdownReport(
+    buildReportPayload({
+      source: { title: "![tracker](https://attacker.test/pixel)", url: "https://example.com" },
+      policyAnalysis: {
+        level: "low",
+        score: 0,
+        risks: [
+          {
+            title: "[deceptive link](https://attacker.test)",
+            severity: "low",
+            evidence: "<img src=https://attacker.test/pixel>",
+            advice: "review"
+          }
+        ],
+        policySections: []
+      }
+    })
+  );
+
+  assert.doesNotMatch(markdown, /!\[tracker\]\(https:\/\/attacker\.test\/pixel\)/);
+  assert.doesNotMatch(markdown, /<img src=/);
+  assert.match(markdown, /- Source: example\\\.com/);
+});

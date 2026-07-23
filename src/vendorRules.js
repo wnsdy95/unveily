@@ -107,9 +107,12 @@ export const VENDOR_RULES = [
 ];
 
 export function classifyVendorHost(hostOrUrl, customRules = []) {
-  const value = String(hostOrUrl || "").toLowerCase();
+  const value = String(hostOrUrl || "").trim().toLowerCase();
+  const target = parseHostPattern(value);
   const rules = [...customRules, ...VENDOR_RULES];
-  const match = rules.find((rule) => rule.patterns.some((pattern) => value.includes(pattern.toLowerCase())));
+  const match = rules.find((rule) =>
+    (Array.isArray(rule.patterns) ? rule.patterns : []).some((pattern) => matchesHostPattern(target, pattern))
+  );
 
   if (!match) {
     return {
@@ -126,4 +129,35 @@ export function classifyVendorHost(hostOrUrl, customRules = []) {
     risk: match.risk,
     expectedPolicySections: match.expectedPolicySections
   };
+}
+
+function parseHostPattern(input) {
+  const value = String(input || "").trim().toLowerCase();
+  if (!value) return { hostname: "", pathname: "/" };
+
+  try {
+    const parsed = new URL(value.includes("://") ? value : `https://${value.replace(/^\*\./, "")}`);
+    return {
+      hostname: parsed.hostname.replace(/^www\./, ""),
+      pathname: parsed.pathname || "/"
+    };
+  } catch {
+    const [host, ...pathParts] = value.replace(/^\*\./, "").split("/");
+    return {
+      hostname: host.replace(/^www\./, "").replace(/:\d+$/, ""),
+      pathname: pathParts.length ? `/${pathParts.join("/")}` : "/"
+    };
+  }
+}
+
+function matchesHostPattern(target, pattern) {
+  const expected = parseHostPattern(pattern);
+  if (!target.hostname || !expected.hostname) return false;
+
+  const hostMatches = target.hostname === expected.hostname || target.hostname.endsWith(`.${expected.hostname}`);
+  if (!hostMatches) return false;
+
+  const normalizedPattern = String(pattern || "").replace(/^https?:\/\//i, "").replace(/^\*\./, "");
+  const hasPathConstraint = normalizedPattern.includes("/") && expected.pathname !== "/";
+  return !hasPathConstraint || target.pathname === expected.pathname || target.pathname.startsWith(`${expected.pathname}/`);
 }
