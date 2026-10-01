@@ -18,6 +18,6 @@
     "update:psl": "node scripts/update-public-suffix-list.mjs"
   },
   "devDependencies": {
-    "puppeteer-core": "^25.3.0"
+    "puppeteer-core": "^25.12.0"
   }
 }
